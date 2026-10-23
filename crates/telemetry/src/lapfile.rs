@@ -1,5 +1,5 @@
-//! Compact binary lap traces (`laps/<id>.bin`), one file per lap. The README ("Lap files")
-//! documents the format for the site's decoder.
+//! Compact binary lap traces, one file per lap. `rta-export` gzips them into
+//! `laps/<id>.bin.gz`; the README ("Lap files") documents the format for the site's decoder.
 //!
 //! Every channel is quantised to the decimals the trace is already rounded to, so decoding gives
 //! back exactly the values the JSON used to carry. Values are stored as the first one plus deltas,

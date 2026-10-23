@@ -14,7 +14,7 @@
 use ride4_data::{events, saves, tracks, Game};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
-use telemetry::{csv::read_session, laps};
+use telemetry::{csv::read_session, lapfile, laps};
 
 type Res<T> = Result<T, Box<dyn std::error::Error>>;
 
@@ -95,14 +95,54 @@ fn game_tables(a: &Args) -> Res<(telemetry::track::Tracks, events::Events)> {
     Ok((t, e))
 }
 
+/// `laps.json`: every lap without its trace, plus where to find the trace.
 #[derive(Serialize)]
-struct SiteData<'a> {
+struct LapIndex {
     /// Unix seconds
     generated: u64,
-    tracks: &'a telemetry::track::Tracks,
-    laps: &'a [laps::Lap],
-    leaderboards: &'a [saves::Leaderboard],
-    career: &'a [saves::CareerResult],
+    laps: Vec<serde_json::Value>,
+}
+
+/// A lap file: the encoded trace, gzipped (the browser undoes it with `DecompressionStream`).
+fn lap_file(tr: &laps::Trace) -> Res<Vec<u8>> {
+    use std::io::Write;
+    let raw = lapfile::encode(tr);
+    if lapfile::decode(&raw)? != *tr {
+        return Err("trace doesn't survive encoding".into());
+    }
+    let mut z = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+    z.write_all(&raw)?;
+    Ok(z.finish()?)
+}
+
+/// Write each lap's trace to `laps/<id>.bin.gz` (removing stale ones) and return the index entries.
+fn write_laps(out: &Path, laps: &[laps::Lap]) -> Res<Vec<serde_json::Value>> {
+    let dir = out.join("laps");
+    std::fs::create_dir_all(&dir)?;
+    let mut index = vec![];
+    let mut written = std::collections::HashSet::new();
+    let mut bytes = 0;
+    for lap in laps {
+        let name = format!("{}.bin.gz", lap.id);
+        let b = lap_file(&lap.trace).map_err(|e| format!("lap {}: {e}", lap.id))?;
+        std::fs::write(dir.join(&name), &b)?;
+        bytes += b.len();
+        let mut v = serde_json::to_value(lap)?;
+        let o = v.as_object_mut().unwrap();
+        o.remove("trace");
+        o.insert("samples".into(), lap.trace.t.len().into());
+        o.insert("file".into(), format!("laps/{name}").into());
+        index.push(v);
+        written.insert(name);
+    }
+    for e in std::fs::read_dir(&dir)?.flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        if (name.ends_with(".bin.gz") || name.ends_with(".bin")) && !written.contains(&name) {
+            std::fs::remove_file(e.path())?;
+        }
+    }
+    println!("{} lap files, {} KB -> {}", laps.len(), bytes / 1024, dir.display());
+    Ok(index)
 }
 
 fn main() -> Res<()> {
@@ -138,12 +178,44 @@ fn main() -> Res<()> {
 
     std::fs::create_dir_all(&a.out)?;
     write_json(&a.out.join("tracks.json"), &tracks)?;
-    write_json(&a.out.join("laps.json"), &logged)?;
     write_json(&a.out.join("leaderboards.json"), &leaderboards)?;
     write_json(&a.out.join("career.json"), &career)?;
     let generated = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs();
-    let all = SiteData { generated, tracks: &tracks, laps: &logged, leaderboards: &leaderboards, career: &career };
-    std::fs::write(a.out.join("data.js"), format!("window.RTA_DATA = {};\n", serde_json::to_string(&all)?))?;
+    let laps = write_laps(&a.out, &logged)?;
+    write_json(&a.out.join("laps.json"), &LapIndex { generated, laps })?;
+    // the old all-in-one bundle for file://; lap traces are separate files now
+    if std::fs::remove_file(a.out.join("data.js")).is_ok() {
+        println!("removed stale data.js");
+    }
     println!("{} logged laps ({} valid) -> {}", logged.len(), logged.iter().filter(|l| l.valid).count(), a.out.display());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Read;
+
+    #[test]
+    fn lap_file_is_gzipped_lapfile() {
+        let tr = laps::Trace {
+            t: vec![0.0, 0.04, 0.081],
+            d: vec![-1.2, 0.3, 1.9],
+            x: vec![100.25, 101.5, 102.75],
+            y: vec![-5.0, -5.01, -5.02],
+            v: vec![140.2, 140.3, 140.5],
+            lean: vec![-3.1, -3.0, -2.8],
+            ax: vec![0.12, 0.1, 0.09],
+            thr: Some(vec![1.0, 1.0, 0.97]),
+            brk: Some(vec![0.0, 0.0, 0.0]),
+            rear: Some(vec![0, 0, 1]),
+            gear: Some(vec![4, 4, 5]),
+            rpm: Some(vec![0.912, 0.95, 0.701]),
+        };
+        let gz = lap_file(&tr).unwrap();
+        assert_eq!(gz[..2], [0x1f, 0x8b]);
+        let mut raw = vec![];
+        flate2::read::GzDecoder::new(&gz[..]).read_to_end(&mut raw).unwrap();
+        assert_eq!(lapfile::decode(&raw).unwrap(), tr);
+    }
 }

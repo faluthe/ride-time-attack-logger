@@ -353,6 +353,7 @@ dependencies = [
 name = "export"
 version = "0.1.0"
 dependencies = [
+ "flate2",
  "ride4-data",
  "serde",
  "serde_json",
