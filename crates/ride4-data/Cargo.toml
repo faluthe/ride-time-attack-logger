@@ -1,0 +1,12 @@
+[package]
+name = "ride4-data"
+description = "Read Ride 4's game files (paks, cooked assets) and save games (GVAS)"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+telemetry.workspace = true
+flate2 = "1"
+serde.workspace = true
+serde_json.workspace = true

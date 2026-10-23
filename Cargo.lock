@@ -1311,6 +1311,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ride4-data"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "serde",
+ "serde_json",
+ "telemetry",
+]
+
+[[package]]
 name = "ride4-mem"
 version = "0.1.0"
 
