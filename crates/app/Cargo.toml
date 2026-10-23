@@ -1,0 +1,16 @@
+[package]
+name = "app"
+description = "Ride Time Attack live logger (Dear ImGui)"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "rta-logger"
+path = "src/main.rs"
+
+[dependencies]
+ride4-mem.workspace = true
+telemetry.workspace = true
+serde.workspace = true
+serde_json.workspace = true

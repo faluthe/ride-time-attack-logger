@@ -1,0 +1,10 @@
+[package]
+name = "telemetry"
+description = "Telemetry samples, CSV sessions, lap cutting and export"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true

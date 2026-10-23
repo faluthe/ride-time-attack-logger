@@ -1,0 +1,63 @@
+{
+  "name": "placeholder",
+  "version": 1,
+  "modes": {
+    "dark": {
+      "bg": "#111214",
+      "surface": "#1a1c1f",
+      "surface-2": "#24272b",
+      "border": "#33373c",
+      "text": "#e8e9eb",
+      "text-muted": "#9097a0",
+      "accent": "#4c8dff",
+      "good": "#3ccf7a",
+      "warn": "#f2b33d",
+      "bad": "#f05a5a",
+      "throttle": "#3ccf7a",
+      "brake": "#f05a5a",
+      "rear": "#ff9a5a",
+      "rpm": "#4c8dff",
+      "speed": "#e8e9eb",
+      "gear": "#f2b33d",
+      "lean": "#b48cff",
+      "redline": "#f05a5a",
+      "series-1": "#4c8dff",
+      "series-2": "#ff8a3d",
+      "series-3": "#3ccf7a",
+      "series-4": "#f2b33d"
+    },
+    "light": {
+      "bg": "#f6f6f4",
+      "surface": "#ffffff",
+      "surface-2": "#eeeeeb",
+      "border": "#d6d6d2",
+      "text": "#17181a",
+      "text-muted": "#5f646b",
+      "accent": "#2a6fe0",
+      "good": "#16a35a",
+      "warn": "#c98500",
+      "bad": "#d03636",
+      "throttle": "#16a35a",
+      "brake": "#d03636",
+      "rear": "#e0702a",
+      "rpm": "#2a6fe0",
+      "speed": "#17181a",
+      "gear": "#c98500",
+      "lean": "#7a4fd6",
+      "redline": "#d03636",
+      "series-1": "#2a6fe0",
+      "series-2": "#e0702a",
+      "series-3": "#16a35a",
+      "series-4": "#c98500"
+    }
+  },
+  "radius": { "sm": 3, "md": 6, "lg": 10 },
+  "space": { "xs": 4, "sm": 8, "md": 12, "lg": 20 },
+  "font": {
+    "ui": "Inter",
+    "mono": "JetBrains Mono",
+    "size": 15,
+    "size-small": 12,
+    "size-large": 28
+  }
+}

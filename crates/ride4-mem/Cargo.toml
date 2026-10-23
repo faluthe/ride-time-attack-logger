@@ -1,0 +1,6 @@
+[package]
+name = "ride4-mem"
+description = "Locate and read the player's bike in Ride 4's process memory"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
