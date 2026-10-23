@@ -16,7 +16,7 @@ const PAUSE_S: f64 = 1.0;
 /// Worst acceptable 90th-percentile distance from a layout's centreline, metres.
 const MAX_OFF_LINE_M: f64 = 25.0;
 
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct Trace {
     pub t: Vec<f64>,
     /// Lap distance from the start line, metres (slightly negative just before it).
