@@ -67,3 +67,81 @@ back to crossings of the track spline's start, about ±0.1 s off the game.
 position (m), forward vector, z of the side and up axes (lean = −asin(side_z)), inputs, then the
 game's race clock, completed laps (−1 without timing) and last lap (ms). Older 9- and 14-column
 files still load.
+
+## Exported data
+
+`rta-export --out DIR` writes:
+
+| File | Contents |
+|---|---|
+| `tracks.json` | layouts (centre line, edges) by track key |
+| `leaderboards.json`, `career.json` | from the save games |
+| `laps.json` | the lap index: `{ "generated": unix seconds, "laps": [ ... ] }` |
+| `laps/<id>.bin.gz` | one lap's trace (see "Lap files"); stale ones are removed |
+
+Each `laps` entry has every lap field except the trace: `id`, `session`, `lap`, `track`,
+`valid`, `problem` (string or null), `time` (s), `game_timed`, `top_speed`, `avg_speed` (km/h),
+`max_lean_left`, `max_lean_right` (deg), `max_brake_g`, `max_accel_g`, and when the session has
+inputs `full_throttle_pct`, `braking_pct`, `top_gear`. On top of that, `samples` is the trace
+length and `file` the trace's path relative to `laps.json` (`laps/<id>.bin.gz`).
+
+There's no `data.js` bundle any more: traces are fetched per lap, which `file://` can't do
+anyway, so serve the site over HTTP.
+
+## Lap files
+
+A lap file is a **gzip stream** (RFC 1952; in the browser,
+`new Response(blob.stream().pipeThrough(new DecompressionStream("gzip"))).arrayBuffer()`) of the
+binary trace below. If a server already undid the gzip (`Content-Encoding`), the bytes start
+with `RTAL` instead of `1f 8b`; check the first two bytes and skip the gunzip.
+
+The trace is little-endian throughout, at 25 samples per second, column by column:
+
+| Offset | Type | Field |
+|---|---|---|
+| 0 | 4 bytes | magic `RTAL` (`52 54 41 4c`) |
+| 4 | u16 | version, `1` |
+| 6 | u16 | channel count `C` |
+| 8 | u32 | sample count `N` (same for every channel) |
+| 12 | `C` × 12 bytes | channel table |
+| 12 + 12·`C` | | channel data, in table order |
+
+Channel table entry (12 bytes):
+
+| Offset | Type | Field |
+|---|---|---|
+| 0 | 4 bytes | name, ASCII, padded with `00` (`t`, `lean`, …) |
+| 4 | u8 | delta width `W` in bytes: 1, 2 or 4 |
+| 5 | u8 | decimals `k` |
+| 6 | u16 | reserved, 0 |
+| 8 | i32 | first quantised value `q[0]` |
+
+Channel data: `N − 1` signed deltas of `W` bytes each (i8, i16 or i32), then zero padding up to a
+multiple of 4 bytes, so every block starts 4-byte aligned (an `Int8Array`/`Int16Array`/
+`Int32Array` view over the decompressed buffer works, as does `DataView`). The encoder picks the
+narrowest `W` that holds every delta of that channel in that lap. Decoding:
+
+```
+q[0] = first;  q[i] = (q[i−1] + delta[i−1]) | 0     // i32 wrap-around, i = 1 .. N−1
+value[i] = q[i] / 10^k                               // divide (don't multiply by 0.1)
+```
+
+Dividing gives exactly the numbers the old JSON traces had. `N = 0` means no data blocks;
+`N = 1` means empty blocks. Skip channels you don't know; rely on names, not positions.
+
+Channels, in the order they're written (the last five only when the session has inputs):
+
+| Name | Unit | `k` | Step | Notes |
+|---|---|---|---|---|
+| `t` | s since lap start | 3 | 1 ms | race clock when the game timed the lap |
+| `d` | m from the start line | 1 | 0.1 m | slightly negative just before the line |
+| `x`, `y` | m, world position | 2 | 1 cm | |
+| `v` | km/h | 1 | 0.1 | |
+| `lean` | degrees, right positive | 1 | 0.1° | |
+| `ax` | longitudinal g | 2 | 0.01 g | |
+| `thr`, `brk` | 0..1 | 2 | 0.01 | |
+| `rear` | 0 or 1 | 0 | | rear brake button |
+| `gear` | integer, 0 = neutral | 0 | | |
+| `rpm` | 0 = idle .. 1 = limiter | 3 | 0.001 | |
+
+A 160 s lap is about 60 KB of trace before gzip and 20–25 KB after (about 215 KB as JSON).
