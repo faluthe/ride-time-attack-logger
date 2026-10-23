@@ -51,6 +51,8 @@ pub struct Lap {
     pub problem: Option<String>,
     /// seconds
     pub time: f64,
+    /// `time` is the game's own lap time (otherwise it's measured between spline crossings)
+    pub game_timed: bool,
     pub top_speed: f64,
     pub avg_speed: f64,
     pub max_lean_left: f64,
@@ -156,6 +158,14 @@ pub fn pick_track(rows: &[Sample], tracks: &Tracks) -> Option<(f64, String, Line
 
 /// Cut one session into laps.
 pub fn cut(session: &str, rows: Vec<Sample>, tracks: &Tracks) -> Vec<Lap> {
+    // With the game's lap timing, run on the race clock: it stops while paused, so pauses vanish
+    // from traces and laps are timed exactly like the game times them.
+    let timed = !rows.is_empty() && rows.iter().filter(|r| r.timing.is_some()).count() * 10 >= rows.len() * 9;
+    let rows: Vec<Sample> = if timed {
+        rows.into_iter().filter_map(|r| Some(Sample { t: r.timing?.clock, ..r })).collect()
+    } else {
+        rows
+    };
     let rows = despike(rows, 100.0, 25);
     if rows.len() < 100 {
         return vec![];
@@ -183,6 +193,10 @@ pub fn cut(session: &str, rows: Vec<Sample>, tracks: &Tracks) -> Vec<Lap> {
         }
     }
 
+    if timed {
+        return cut_by_game(session, &rows, &prog, &key, l, wrap);
+    }
+
     // start/finish crossings with interpolated time
     let mut crossings = vec![];
     for i in 1..rows.len() {
@@ -206,6 +220,38 @@ pub fn cut(session: &str, rows: Vec<Sample>, tracks: &Tracks) -> Vec<Lap> {
         });
         export(&rows, &prog, i0..i1, t0, t1, &key, session, n + 1, problem, l)
     }).collect()
+}
+
+/// Laps as the game counts them: each time the completed-lap counter goes up, the lap that just
+/// ended took exactly `last_lap_ms`, so it started that long before on the race clock. Laps whose
+/// start predates the recording are skipped.
+fn cut_by_game(session: &str, rows: &[Sample], prog: &[f64], key: &str, l: f64, wrap: impl Fn(f64) -> f64) -> Vec<Lap> {
+    let timing = |i: usize| rows[i].timing.unwrap();
+    let mut out = vec![];
+    for i1 in 1..rows.len() {
+        let (before, now) = (timing(i1 - 1), timing(i1));
+        if now.laps != before.laps + 1 || now.last_lap_ms <= 0 {
+            continue;
+        }
+        let lap_s = now.last_lap_ms as f64 / 1000.0;
+        // the counter flips on the first frame after the line; that frame's clock is the lap end
+        let t1 = rows[i1].t;
+        let t0 = t1 - lap_s;
+        if rows[0].t > t0 + 0.05 {
+            continue; // recording started mid-lap
+        }
+        let i0 = rows.partition_point(|r| r.t < t0).min(i1 - 1);
+        let problem = (i0 + 1..i1).find_map(|j| {
+            (wrap(prog[j] - prog[j - 1]) < -BACKWARDS_M || dist2(&rows[j], &rows[j - 1]) > RESET_JUMP_M)
+                .then_some("reset or rewind")
+        });
+        let mut lap = export(rows, prog, i0..i1, t0, t1, key, session, now.laps as usize, problem, l);
+        lap.time = round(lap_s, 3);
+        lap.avg_speed = round(l / lap_s * 3.6, 1);
+        lap.game_timed = true;
+        out.push(lap);
+    }
+    out
 }
 
 /// Least-squares fit of s = a0 + a1 u + a2 u² around one sample -> (speed km/h, accel g).
@@ -320,6 +366,7 @@ fn export(rows: &[Sample], prog: &[f64], seg: std::ops::Range<usize>, t0: f64, t
         track: key.into(),
         valid: problem.is_none(),
         problem: problem.map(Into::into),
+        game_timed: false,
         time: round(t1 - t0, 3),
         top_speed: max(&tr.v),
         avg_speed: round(l / (t1 - t0) * 3.6, 1),

@@ -14,6 +14,19 @@ pub struct Sample {
     pub up_z: f32,
     /// Rider inputs 0..1; `None` for sessions recorded before inputs were found.
     pub inputs: Option<Inputs>,
+    /// The game's lap timing; `None` in modes without it and in older sessions.
+    pub timing: Option<GameTiming>,
+}
+
+/// Lap timing read from the game (Time Attack).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct GameTiming {
+    /// Race clock, seconds; stops while the game is paused.
+    pub clock: f64,
+    /// Completed laps.
+    pub laps: i32,
+    /// Last completed lap, milliseconds.
+    pub last_lap_ms: i32,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -39,6 +52,7 @@ impl Sample {
             side_z: 2.0 * (y * z + w * x),
             up_z: 1.0 - 2.0 * (x * x + y * y),
             inputs,
+            timing: None,
         }
     }
 

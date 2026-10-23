@@ -5,4 +5,4 @@ pub mod laps;
 pub mod sample;
 pub mod track;
 
-pub use sample::{Inputs, Sample};
+pub use sample::{GameTiming, Inputs, Sample};

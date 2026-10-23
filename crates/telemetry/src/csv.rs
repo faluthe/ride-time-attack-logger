@@ -1,14 +1,15 @@
 //! Session CSV files: one row per frame.
 //!
-//! Columns: `t,x,y,z,fx,fy,fz,side_z,up_z,throttle,brake,rear,gear,rpm`. Sessions recorded before
-//! 2026-10-22 have only the first nine; they still load, with `inputs: None`.
+//! Columns: `t,x,y,z,fx,fy,fz,side_z,up_z,throttle,brake,rear,gear,rpm,clock,laps,last_lap_ms`.
+//! Older sessions have only the first nine (before inputs were found) or fourteen (before the
+//! game's lap timing was found); they still load. In modes without lap timing, `laps` is -1.
 
-use crate::sample::{Inputs, Sample};
+use crate::sample::{GameTiming, Inputs, Sample};
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
 use std::path::Path;
 
-pub const HEADER: &str = "t,x,y,z,fx,fy,fz,side_z,up_z,throttle,brake,rear,gear,rpm";
+pub const HEADER: &str = "t,x,y,z,fx,fy,fz,side_z,up_z,throttle,brake,rear,gear,rpm,clock,laps,last_lap_ms";
 
 pub struct SessionWriter {
     out: BufWriter<File>,
@@ -31,6 +32,10 @@ impl SessionWriter {
         write!(self.out, "{:.4},{x:.3},{y:.3},{z:.3},{fx:.5},{fy:.5},{fz:.5},{:.5},{:.5}", s.t, s.side_z, s.up_z)?;
         if let Some(i) = s.inputs {
             write!(self.out, ",{:.3},{:.3},{:.0},{},{:.4}", i.throttle, i.brake, i.rear, i.gear, i.rpm)?;
+            match s.timing {
+                Some(g) => write!(self.out, ",{:.4},{},{}", g.clock, g.laps, g.last_lap_ms)?,
+                None => write!(self.out, ",0,-1,0")?,
+            }
         }
         writeln!(self.out)?;
         self.rows += 1;
@@ -59,7 +64,7 @@ pub fn read_session(path: &Path) -> io::Result<Vec<Sample>> {
             Ok(v) => v,
             Err(_) => continue,
         };
-        if v.len() != 9 && v.len() != 14 {
+        if ![9, 14, 17].contains(&v.len()) {
             continue;
         }
         let f = |i: usize| v[i] as f32;
@@ -69,7 +74,8 @@ pub fn read_session(path: &Path) -> io::Result<Vec<Sample>> {
             fwd: [f(4), f(5), f(6)],
             side_z: f(7),
             up_z: f(8),
-            inputs: (v.len() == 14).then(|| Inputs { throttle: f(9), brake: f(10), rear: f(11), gear: v[12] as i32, rpm: f(13) }),
+            inputs: (v.len() >= 14).then(|| Inputs { throttle: f(9), brake: f(10), rear: f(11), gear: v[12] as i32, rpm: f(13) }),
+            timing: (v.len() == 17 && v[15] >= 0.0).then(|| GameTiming { clock: v[14], laps: v[15] as i32, last_lap_ms: v[16] as i32 }),
         });
     }
     Ok(out)
@@ -80,19 +86,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn roundtrip_with_and_without_inputs() {
+    fn roundtrip_all_column_sets() {
         let dir = std::env::temp_dir().join(format!("rta-csv-{}", std::process::id()));
         let path = dir.join("s.csv");
-        let a = Sample::from_quat(0.5, [1.0, 2.0, 3.0], [0.0, 0.0, 0.0, 1.0],
+        let mut a = Sample::from_quat(0.5, [1.0, 2.0, 3.0], [0.0, 0.0, 0.0, 1.0],
             Some(Inputs { throttle: 0.5, brake: 0.25, rear: 1.0, gear: 3, rpm: 0.75 }));
+        a.timing = Some(GameTiming { clock: 12.5, laps: 2, last_lap_ms: 138278 });
         let mut w = SessionWriter::create(&path).unwrap();
         w.write(&a).unwrap();
-        w.write(&Sample { inputs: None, ..a }).unwrap();
+        w.write(&Sample { timing: None, ..a }).unwrap();
+        w.write(&Sample { inputs: None, timing: None, ..a }).unwrap();
         w.finish().unwrap();
         let back = read_session(&path).unwrap();
-        assert_eq!(back.len(), 2);
+        assert_eq!(back.len(), 3);
+        assert_eq!(back[0].timing.unwrap().last_lap_ms, 138278);
         assert_eq!(back[0].inputs.unwrap().gear, 3);
-        assert!(back[1].inputs.is_none());
+        assert!(back[1].timing.is_none() && back[1].inputs.is_some());
+        assert!(back[2].inputs.is_none());
         assert!((back[0].fwd[0] - 1.0).abs() < 1e-6);
         std::fs::remove_dir_all(dir).unwrap();
     }
