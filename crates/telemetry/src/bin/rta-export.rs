@@ -3,8 +3,9 @@
 //! ```text
 //! rta-export [--sessions DIR] [--tracks FILE] --out DIR
 //! ```
-//! Writes `DIR/tracks.json` (every layout) and `DIR/laps.json` (every lap, with
-//! traces). Defaults read from `~/.local/share/ride-time-attack/`.
+//! Writes `DIR/tracks.json` (every layout), `DIR/laps.json` (every lap, with traces) and
+//! `DIR/data.js`, the same data as a classic script so the built site also works from `file://`,
+//! where browsers block `fetch`. Defaults read from `~/.local/share/ride-time-attack/`.
 
 use std::path::PathBuf;
 use telemetry::{csv::read_session, laps, track::load_tracks};
@@ -50,6 +51,12 @@ fn main() -> std::io::Result<()> {
     let used = tracks.keys().filter(|k| all.iter().any(|l| &l.track == *k)).count();
     serde_json::to_writer(std::fs::File::create(out.join("laps.json"))?, &all).map_err(std::io::Error::other)?;
     serde_json::to_writer(std::fs::File::create(out.join("tracks.json"))?, &tracks).map_err(std::io::Error::other)?;
+    let js = format!(
+        "window.RTA_DATA = {{\"tracks\":{},\"laps\":{}}};\n",
+        serde_json::to_string(&tracks).map_err(std::io::Error::other)?,
+        serde_json::to_string(&all).map_err(std::io::Error::other)?,
+    );
+    std::fs::write(out.join("data.js"), js)?;
     println!("{} laps ({} valid) on {used} layouts -> {}", all.len(), all.iter().filter(|l| l.valid).count(), out.display());
     Ok(())
 }
