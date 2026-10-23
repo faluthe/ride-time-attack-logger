@@ -20,15 +20,22 @@ pub trait Frame {
     fn frame(&mut self, ui: &imgui::Ui);
     /// Called once after the ImGui context exists, to load fonts and style.
     fn setup(&mut self, ctx: &mut imgui::Context, hidpi: f32);
+    /// Called after each frame is rendered, before the buffer swap (e.g. to grab pixels).
+    fn rendered(&mut self, _gl: &glow::Context, _size: [u32; 2]) {}
+    /// Whether the app wants to quit.
+    fn quit(&self) -> bool {
+        false
+    }
 }
 
+// Field order is drop order: GL objects must go before the context, and the context before the window.
 struct Gfx {
-    window: Window,
+    renderer: imgui_glow_renderer::AutoRenderer,
+    imgui: imgui::Context,
+    platform: WinitPlatform,
     surface: Surface<WindowSurface>,
     context: PossiblyCurrentContext,
-    platform: WinitPlatform,
-    imgui: imgui::Context,
-    renderer: imgui_glow_renderer::AutoRenderer,
+    window: Window,
     last: Instant,
 }
 
@@ -119,6 +126,11 @@ impl<F: Frame> ApplicationHandler for App<F> {
                 g.platform.prepare_render(ui, &g.window);
                 let draw = g.imgui.render();
                 g.renderer.render(draw).expect("imgui render");
+                let px = g.window.inner_size();
+                self.frame.rendered(g.renderer.gl_context(), [px.width, px.height]);
+                if self.frame.quit() {
+                    el.exit();
+                }
                 g.surface.swap_buffers(&g.context).expect("swap buffers");
                 return;
             }
