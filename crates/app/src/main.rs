@@ -154,6 +154,42 @@ impl Logger {
             widgets::lamp(ui, th, [bw, s[1]], inp.rear > 0.5, "rear", "rear");
         });
 
+        // lap timing strip (the game's own clock, Time Attack only)
+        ui.dummy([0.0, gap * 0.25]);
+        let fmt = |s: f64| if s.is_finite() && s > 0.0 { format!("{}:{:06.3}", (s / 60.0).floor(), s % 60.0) } else { "-:--.---".into() };
+        let (current, last, best, laps) = match live.timing {
+            Some((g, best)) => (
+                live.lap_start.map_or(f64::NAN, |s| g.clock - s),
+                g.last_lap_ms as f64 / 1000.0,
+                best as f64,
+                Some(g.laps),
+            ),
+            None => (f64::NAN, f64::NAN, f64::NAN, None),
+        };
+        {
+            let _f = ui.push_font(f.large);
+            let cell = |label: &str, value: String, role: &str| {
+                ui.group(|| {
+                    let _s = ui.push_font(f.small);
+                    ui.text_disabled(label);
+                    drop(_s);
+                    ui.text_colored(th.c(role), value);
+                });
+            };
+            cell("CURRENT LAP", fmt(current), "text");
+            ui.same_line_with_spacing(0.0, 48.0);
+            cell("LAST LAP", fmt(last), "text");
+            ui.same_line_with_spacing(0.0, 48.0);
+            cell("BEST LAP", fmt(best), "good");
+            ui.same_line_with_spacing(0.0, 48.0);
+            cell("LAPS", laps.map_or("-".into(), |n| n.to_string()), "text");
+            if laps.is_none() && on {
+                ui.same_line_with_spacing(0.0, 48.0);
+                let _s = ui.push_font(f.small);
+                ui.text_disabled("lap timing is read in Time Attack");
+            }
+        }
+
         // rolling graphs
         ui.dummy([0.0, gap * 0.5]);
         let h: Vec<_> = live.history.iter().collect();

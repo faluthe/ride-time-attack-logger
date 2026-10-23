@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 use telemetry::csv::SessionWriter;
-use telemetry::{Inputs, Sample};
+use telemetry::{GameTiming, Inputs, Sample};
 
 pub const HZ: f64 = 50.0;
 /// Seconds of history kept for the live graphs.
@@ -58,12 +58,16 @@ pub struct Live {
     pub recording: Option<Recording>,
     /// Actual sample rate over the last second.
     pub rate: f32,
+    /// The game's lap timing (Time Attack), with best lap; `None` in other modes.
+    pub timing: Option<(GameTiming, f32)>,
+    /// Race-clock time the current lap started, once a lap boundary has been seen.
+    pub lap_start: Option<f64>,
 }
 
 impl Default for Live {
     fn default() -> Self {
         Self { link: Link::NoGame, pid: None, bike: None, controller: None, sample: None, speed: 0.0,
-            history: VecDeque::new(), recording: None, rate: 0.0 }
+            history: VecDeque::new(), recording: None, rate: 0.0, timing: None, lap_start: None }
     }
 }
 
@@ -130,6 +134,8 @@ fn ride(session: &mut Session, live: &Mutex<Live>, record: &AtomicBool, dir: &st
     let mut last_pos = None;
     let mut bike = None;
     let mut ticks: VecDeque<Instant> = VecDeque::new();
+    let mut lap_start: Option<f64> = None;
+    let mut last_laps: Option<i32> = None;
 
     while session.process.alive() {
         let state = session.poll();
@@ -148,6 +154,8 @@ fn ride(session: &mut Session, live: &Mutex<Live>, record: &AtomicBool, dir: &st
             }
             bike = actor;
             recent.clear();
+            lap_start = None;
+            last_laps = None;
             last_pos = None;
             let controller = actor.and_then(|_| session.chain()).and_then(|c| session.class_of(c.controller));
             set(live, |l| { l.history.clear(); l.bike = actor; l.controller = controller; l.recording = None; });
@@ -175,7 +183,22 @@ fn ride(session: &mut Session, live: &Mutex<Live>, record: &AtomicBool, dir: &st
                 }
 
                 let rec_t0 = writer.as_ref().map_or(t, |w| w.3);
-                let sample = Sample::from_quat(t - rec_t0, b.pos, b.rot, Some(inputs));
+                let game = session.timing();
+                let timing = game.map(|g| GameTiming { clock: g.race_clock as f64, laps: g.laps, last_lap_ms: g.last_lap_ms });
+                if let Some(g) = timing {
+                    // a new lap starts when the counter goes up; chain exact lap times after that
+                    if last_laps.is_some_and(|n| g.laps == n + 1) {
+                        lap_start = Some(match lap_start {
+                            Some(s) => s + g.last_lap_ms as f64 / 1000.0,
+                            None => g.clock,
+                        });
+                    } else if last_laps.is_some_and(|n| g.laps != n) {
+                        lap_start = None; // restart or new session
+                    }
+                    last_laps = Some(g.laps);
+                }
+                let mut sample = Sample::from_quat(t - rec_t0, b.pos, b.rot, Some(inputs));
+                sample.timing = timing;
                 if moved {
                     if let Some((w, ..)) = writer.as_mut() {
                         let _ = w.write(&sample);
@@ -205,6 +228,8 @@ fn ride(session: &mut Session, live: &Mutex<Live>, record: &AtomicBool, dir: &st
                     }
                     l.recording = recording;
                     l.rate = ticks.len() as f32;
+                    l.timing = timing.zip(game.map(|g| g.best_lap));
+                    l.lap_start = lap_start;
                 });
             }
         }
