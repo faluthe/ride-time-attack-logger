@@ -44,3 +44,22 @@ pub const AUDIO_RPM: u64 = 0x238;
 // UObject layout (UE 4.25)
 pub const UOBJECT_CLASS: u64 = 0x10;
 pub const UOBJECT_NAME: u64 = 0x18;
+
+// Lap timing (Time Attack), found 2026-10-22: scanned for clocks advancing at wall-clock rate and
+// for the lap time the game displayed (2:18.278 -> 138278 ms), then followed outers/references.
+/// `UWorld::GameState` (`TimeAttackGameStateBP_C` in Time Attack).
+pub const WORLD_GAME_STATE: u64 = 0x130;
+/// `HudLogicComponent` on the game state.
+pub const GAME_STATE_HUD_LOGIC: u64 = 0x358;
+/// f32 seconds: best lap of this session.
+pub const HUD_BEST_LAP: u64 = 0xe8;
+/// `TimedResultsManagerComponent` (on the competition actor).
+pub const HUD_RESULTS: u64 = 0xf8;
+/// f32 seconds: race clock. It stops while paused, unlike wall time.
+pub const HUD_RACE_CLOCK: u64 = 0x174;
+/// `TArray<TimedResultItem*>`, one per participant; the player is first (ghosts stay empty).
+pub const RESULTS_ITEMS: u64 = 0xd0;
+/// i32: completed laps (the count of the lap-time array at +0x98).
+pub const ITEM_LAPS: u64 = 0xa0;
+/// i32 milliseconds: the last completed lap, exactly as the game shows it.
+pub const ITEM_LAST_LAP_MS: u64 = 0xa8;

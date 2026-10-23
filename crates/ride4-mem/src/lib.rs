@@ -12,7 +12,7 @@ pub mod names;
 pub mod offsets;
 pub mod process;
 
-pub use locator::{Bike, BikeState, Chain};
+pub use locator::{Bike, BikeState, Chain, Timing};
 pub use process::{LinuxProcess, Memory};
 
 use locator::{class_name, find_gworld, resolve, scan_gworld, BIKE_CLASS};
@@ -61,6 +61,11 @@ impl Session {
 
     pub fn class_of(&self, obj: u64) -> Option<String> {
         class_name(&self.process, &self.names, obj)
+    }
+
+    /// The game's lap timing, when the current mode has it (Time Attack).
+    pub fn timing(&self) -> Option<Timing> {
+        locator::timing(&self.process, &self.names, self.chain()?.world)
     }
 
     /// Read the player's bike, re-locating it when the pawn changes. `None` when there's no bike.

@@ -104,3 +104,35 @@ impl Bike {
         })
     }
 }
+
+/// The game's own lap timing (Time Attack).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Timing {
+    /// Race clock, seconds. Stops while the game is paused.
+    pub race_clock: f32,
+    /// Completed laps.
+    pub laps: i32,
+    /// Last completed lap, milliseconds (0 before the first one).
+    pub last_lap_ms: i32,
+    /// Best lap this session, seconds.
+    pub best_lap: f32,
+}
+
+/// Read the lap timing through `World -> GameState -> HudLogicComponent`. `None` outside modes
+/// that have one (checked by class name, so other game states can't be misread).
+pub fn timing(m: &impl Memory, names: &Names, world: u64) -> Option<Timing> {
+    let deref = |p: u64| m.u64(p).filter(|&v| is_ptr(v));
+    let gs = deref(world + WORLD_GAME_STATE)?;
+    let hud = deref(gs + GAME_STATE_HUD_LOGIC)?;
+    if class_name(m, names, hud).as_deref() != Some("HudLogicComponent") {
+        return None;
+    }
+    let results = deref(hud + HUD_RESULTS)?;
+    let player = deref(deref(results + RESULTS_ITEMS)?)?;
+    Some(Timing {
+        race_clock: m.f32(hud + HUD_RACE_CLOCK)?,
+        laps: m.i32(player + ITEM_LAPS)?,
+        last_lap_ms: m.i32(player + ITEM_LAST_LAP_MS)?,
+        best_lap: m.f32(hud + HUD_BEST_LAP)?,
+    })
+}
