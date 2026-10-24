@@ -9,8 +9,6 @@ use std::collections::HashSet;
 const RESET_JUMP_M: f64 = 30.0;
 /// Progress going backwards by more than this invalidates the lap, metres.
 const BACKWARDS_M: f64 = 40.0;
-/// Samples per second kept in exported traces.
-const OUT_HZ: f64 = 25.0;
 /// No new frames for this long = paused (the game's lap timer stops; ours wouldn't).
 const PAUSE_S: f64 = 1.0;
 /// Worst acceptable 90th-percentile distance from a layout's centreline, metres.
@@ -23,6 +21,10 @@ pub struct Trace {
     pub d: Vec<f64>,
     pub x: Vec<f64>,
     pub y: Vec<f64>,
+    /// height, metres
+    pub z: Vec<f64>,
+    /// heading, degrees: atan2 of the forward vector's y and x (0 = +x, 90 = +y)
+    pub hdg: Vec<f64>,
     /// km/h
     pub v: Vec<f64>,
     /// degrees, right positive
@@ -316,7 +318,6 @@ fn export(rows: &[Sample], prog: &[f64], seg: std::ops::Range<usize>, t0: f64, t
         cum.push(cum.last().unwrap() + dist3(&rows[w[0]], &rows[w[1]]));
     }
     let times: Vec<f64> = idx.iter().map(|&k| rows[k].t).collect();
-    let step = if t1 > t0 { ((idx.len() as f64 / ((t1 - t0) * OUT_HZ)).round() as usize).max(1) } else { 1 };
     let mid = idx[idx.len() / 2];
     let inputs = rows[idx[0]].inputs.is_some();
 
@@ -328,13 +329,16 @@ fn export(rows: &[Sample], prog: &[f64], seg: std::ops::Range<usize>, t0: f64, t
         tr.gear = Some(vec![]);
         tr.rpm = Some(vec![]);
     }
-    for c in (0..idx.len()).step_by(step) {
+    // every logged frame: sessions hold one row per game frame, so nothing is resampled
+    for c in 0..idx.len() {
         let j = idx[c];
         let r = &rows[j];
         tr.t.push(round(r.t - t0, 3));
         tr.d.push(round(if prog[j] < 0.9 * l || j > mid { prog[j] } else { prog[j] - l }, 1));
         tr.x.push(round(r.pos[0] as f64, 2));
         tr.y.push(round(r.pos[1] as f64, 2));
+        tr.z.push(round(r.pos[2] as f64, 2));
+        tr.hdg.push(round(r.heading_deg() as f64, 1));
         let (v, ax) = kinematics(&times, &cum, c, 0.5);
         tr.v.push(round(v, 1));
         tr.ax.push(round(ax, 2));

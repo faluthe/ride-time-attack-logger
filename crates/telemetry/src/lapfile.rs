@@ -8,18 +8,21 @@
 use crate::laps::Trace;
 
 pub const MAGIC: &[u8; 4] = b"RTAL";
-pub const VERSION: u16 = 1;
+/// 2 added `z` and `hdg`; version 1 files still decode, with those channels empty.
+pub const VERSION: u16 = 2;
 /// Bytes before the channel table.
 const HEAD: usize = 12;
 /// Bytes per channel table entry.
 const ENTRY: usize = 12;
 
 /// Channel name -> decimals kept, in file order. Input channels are written only when present.
-pub const CHANNELS: [(&str, u8); 12] = [
+pub const CHANNELS: [(&str, u8); 14] = [
     ("t", 3),
     ("d", 1),
     ("x", 2),
     ("y", 2),
+    ("z", 2),
+    ("hdg", 1),
     ("v", 1),
     ("lean", 1),
     ("ax", 2),
@@ -47,7 +50,7 @@ pub fn encode(tr: &Trace) -> Vec<u8> {
     let rear = tr.rear.as_ref().map(|v| v.iter().map(|&x| x as f64).collect::<Vec<_>>());
     let gear = tr.gear.as_ref().map(|v| f64s(v));
     let cols: Vec<Option<&Vec<f64>>> = vec![
-        Some(&tr.t), Some(&tr.d), Some(&tr.x), Some(&tr.y), Some(&tr.v), Some(&tr.lean), Some(&tr.ax),
+        Some(&tr.t), Some(&tr.d), Some(&tr.x), Some(&tr.y), Some(&tr.z), Some(&tr.hdg), Some(&tr.v), Some(&tr.lean), Some(&tr.ax),
         tr.thr.as_ref(), tr.brk.as_ref(), rear.as_ref(), gear.as_ref(), tr.rpm.as_ref(),
     ];
     let n = tr.t.len();
@@ -104,7 +107,7 @@ pub fn decode(b: &[u8]) -> Result<Trace, String> {
     let u16_at = |at| get(at, 2).map(|s| u16::from_le_bytes([s[0], s[1]]));
     let u32_at = |at| get(at, 4).map(|s| u32::from_le_bytes([s[0], s[1], s[2], s[3]]));
     let version = u16_at(4)?;
-    if version != VERSION {
+    if !(1..=VERSION).contains(&version) {
         return Err(format!("unsupported lap file version {version}"));
     }
     let count = u16_at(6)? as usize;
@@ -141,6 +144,8 @@ pub fn decode(b: &[u8]) -> Result<Trace, String> {
             "d" => tr.d = vals,
             "x" => tr.x = vals,
             "y" => tr.y = vals,
+            "z" => tr.z = vals,
+            "hdg" => tr.hdg = vals,
             "v" => tr.v = vals,
             "lean" => tr.lean = vals,
             "ax" => tr.ax = vals,
@@ -168,6 +173,8 @@ mod tests {
             tr.d.push(r(f * 2.7 - 3.0, 1));
             tr.x.push(r(-1523.456 + (f * 0.05).sin() * 300.0, 2));
             tr.y.push(r(8123.4 + (f * 0.05).cos() * 300.0, 2));
+            tr.z.push(r(42.0 + (f * 0.01).sin() * 8.0, 2));
+            tr.hdg.push(r(((f * 1.3) % 360.0) - 180.0, 1));
             tr.v.push(r(150.0 + (f * 0.1).sin() * 90.0, 1));
             tr.lean.push(r((f * 0.07).sin() * 55.0, 1));
             tr.ax.push(r((f * 0.13).cos() * 1.4, 2));

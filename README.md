@@ -1,9 +1,13 @@
 # Ride Time Attack: logger
 
 Live telemetry and data tools for **Ride 4** on Linux (Steam/Proton). The logger reads the
-player's bike and the game's lap timing straight out of memory at 50 Hz, shows them on a Dear
-ImGui dashboard and records sessions to CSV. `rta-export` turns sessions, your save games and
-the game's own files into the data the site shows.
+player's bike and the game's lap timing straight out of memory, shows them on a Dear ImGui
+dashboard and records sessions to CSV. The reader polls at 500 Hz and records one row per game
+frame (the game moves the bike once per frame, ~85-90 fps here; `examples/framerate.rs` measures
+it). In Time Attack the race clock, which the game also steps once per frame and just before the
+position, timestamps each row, so samples line up exactly with the frames they came from.
+`rta-export` turns sessions, your save games and the game's own files into the data the site
+shows.
 
 ```sh
 cargo run --release --bin rta-logger                 # dashboard; records on track, uploads each lap
@@ -114,12 +118,15 @@ A lap file is a **gzip stream** (RFC 1952; in the browser,
 binary trace below. If a server already undid the gzip (`Content-Encoding`), the bytes start
 with `RTAL` instead of `1f 8b`; check the first two bytes and skip the gunzip.
 
-The trace is little-endian throughout, at 25 samples per second, column by column:
+The trace holds every frame of the lap as it was recorded (no resampling: ~85-90 per second in
+sessions from the 500 Hz reader, 50 in older ones). Positions are the recorded ones: the
+export only drops frames that glitched to another bike, and never interpolates. Little-endian
+throughout, column by column:
 
 | Offset | Type | Field |
 |---|---|---|
 | 0 | 4 bytes | magic `RTAL` (`52 54 41 4c`) |
-| 4 | u16 | version, `1` |
+| 4 | u16 | version, `2` (1 lacked `z` and `hdg`) |
 | 6 | u16 | channel count `C` |
 | 8 | u32 | sample count `N` (same for every channel) |
 | 12 | `C` × 12 bytes | channel table |
@@ -155,6 +162,8 @@ Channels, in the order they're written (the last five only when the session has 
 | `t` | s since lap start | 3 | 1 ms | race clock when the game timed the lap |
 | `d` | m from the start line | 1 | 0.1 m | slightly negative just before the line |
 | `x`, `y` | m, world position | 2 | 1 cm | |
+| `z` | m, height | 2 | 1 cm | version 2 |
+| `hdg` | degrees, `atan2(fwd.y, fwd.x)`: 0 = +x, 90 = +y | 1 | 0.1° | −180..180, version 2 |
 | `v` | km/h | 1 | 0.1 | |
 | `lean` | degrees, right positive | 1 | 0.1° | |
 | `ax` | longitudinal g | 2 | 0.01 g | |
@@ -163,4 +172,5 @@ Channels, in the order they're written (the last five only when the session has 
 | `gear` | integer, 0 = neutral | 0 | | |
 | `rpm` | 0 = idle .. 1 = limiter | 3 | 0.001 | |
 
-A 160 s lap is about 60 KB of trace before gzip and 20–25 KB after (about 215 KB as JSON).
+A 160 s lap at ~88 frames per second is about 14 000 samples: roughly 200 KB of trace before
+gzip and 60-70 KB after.
