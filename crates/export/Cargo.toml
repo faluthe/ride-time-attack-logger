@@ -5,9 +5,12 @@ edition.workspace = true
 version.workspace = true
 license.workspace = true
 
+[lib]
+path = "src/lib.rs"
+
 [[bin]]
 name = "rta-export"
-path = "src/main.rs"
+path = "src/bin/rta-export.rs"
 
 [dependencies]
 telemetry.workspace = true
