@@ -12,7 +12,9 @@ use std::time::{Duration, Instant};
 use telemetry::csv::SessionWriter;
 use telemetry::{GameTiming, Inputs, Sample};
 
-pub const HZ: f64 = 50.0;
+/// Polls per second. The game moves the bike once per rendered frame (~85-90 fps here), so this
+/// is well above the frame rate: each frame is caught within 2 ms of being drawn and recorded once.
+pub const HZ: f64 = 500.0;
 /// Seconds of history kept for the live graphs.
 pub const HISTORY_S: f64 = 30.0;
 
@@ -57,8 +59,10 @@ pub struct Live {
     pub speed: f32,
     pub history: VecDeque<Point>,
     pub recording: Option<Recording>,
-    /// Actual sample rate over the last second.
+    /// Actual poll rate over the last second.
     pub rate: f32,
+    /// Game frames (new bike positions) over the last second: the rate sessions are recorded at.
+    pub fps: f32,
     /// The game's lap timing (Time Attack), with best lap; `None` in other modes.
     pub timing: Option<(GameTiming, f32)>,
     /// Seconds into the current lap, from the game's own lap timer.
@@ -68,7 +72,7 @@ pub struct Live {
 impl Default for Live {
     fn default() -> Self {
         Self { link: Link::NoGame, pid: None, bike: None, controller: None, sample: None, speed: 0.0,
-            history: VecDeque::new(), recording: None, rate: 0.0, timing: None, current_lap: None }
+            history: VecDeque::new(), recording: None, rate: 0.0, fps: 0.0, timing: None, current_lap: None }
     }
 }
 
@@ -136,6 +140,7 @@ fn ride(session: &mut Session, live: &Mutex<Live>, record: &AtomicBool, dir: &st
     let mut last_pos = None;
     let mut bike = None;
     let mut ticks: VecDeque<Instant> = VecDeque::new();
+    let mut frames: VecDeque<Instant> = VecDeque::new();
     let mut last_laps: Option<i32> = None;
     // a lap was completed but its last row isn't written yet
     let mut lap_done = false;
@@ -147,6 +152,9 @@ fn ride(session: &mut Session, live: &Mutex<Live>, record: &AtomicBool, dir: &st
         ticks.push_back(now);
         while ticks.front().is_some_and(|&x| now - x > Duration::from_secs(1)) {
             ticks.pop_front();
+        }
+        while frames.front().is_some_and(|&x| now - x > Duration::from_secs(1)) {
+            frames.pop_front();
         }
 
         let actor = matches!(session.status(), ride4_mem::Status::Riding { .. }).then(|| session.chain().map(|c| c.bike)).flatten();
@@ -165,7 +173,7 @@ fn ride(session: &mut Session, live: &Mutex<Live>, record: &AtomicBool, dir: &st
         }
 
         match state {
-            None => set(live, |l| { l.link = Link::NoBike; l.sample = None; l.speed = 0.0; l.rate = ticks.len() as f32; }),
+            None => set(live, |l| { l.link = Link::NoBike; l.sample = None; l.speed = 0.0; l.rate = ticks.len() as f32; l.fps = 0.0; }),
             Some(b) => {
                 let inputs = Inputs { throttle: b.throttle, brake: b.brake, rear: b.rear, gear: b.gear, rpm: b.rpm };
                 // The game only moves the bike once per rendered frame; skip repeats so speed and
@@ -198,6 +206,7 @@ fn ride(session: &mut Session, live: &Mutex<Live>, record: &AtomicBool, dir: &st
                 let mut sample = Sample::from_quat(t - rec_t0, b.pos, b.rot, Some(inputs));
                 sample.timing = timing;
                 if moved {
+                    frames.push_back(now);
                     if let Some((w, ..)) = writer.as_mut() {
                         let _ = w.write(&sample);
                         if std::mem::take(&mut lap_done) && w.flush().is_ok() {
@@ -225,12 +234,16 @@ fn ride(session: &mut Session, live: &Mutex<Live>, record: &AtomicBool, dir: &st
                         l.speed = if l.speed == 0.0 { speed } else { l.speed + 0.3 * (speed - l.speed) };
                     }
                     l.sample = Some(sample);
-                    l.history.push_back(Point { t, speed: l.speed, lean: sample.lean_deg(), inputs });
+                    // one graph point per game frame, not per poll
+                    if moved || l.history.is_empty() {
+                        l.history.push_back(Point { t, speed: l.speed, lean: sample.lean_deg(), inputs });
+                    }
                     while l.history.front().is_some_and(|p| t - p.t > HISTORY_S) {
                         l.history.pop_front();
                     }
                     l.recording = recording;
                     l.rate = ticks.len() as f32;
+                    l.fps = frames.len() as f32;
                     l.timing = timing.zip(game.map(|g| g.best_lap));
                     l.current_lap = game.and_then(|g| g.current_lap);
                 });

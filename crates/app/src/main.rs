@@ -94,7 +94,7 @@ impl Logger {
         }
         if live.link == Link::Riding {
             ui.same_line();
-            ui.text_disabled(format!("{:.0} Hz", live.rate));
+            ui.text_disabled(format!("{:.0} fps · {:.0} Hz", live.fps, live.rate));
         }
         mono.pop();
 
