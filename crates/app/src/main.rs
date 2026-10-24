@@ -184,7 +184,7 @@ impl Logger {
         let fmt = |s: f64| if s.is_finite() && s > 0.0 { format!("{}:{:06.3}", (s / 60.0).floor(), s % 60.0) } else { "-:--.---".into() };
         let (current, last, best, laps) = match live.timing {
             Some((g, best)) => (
-                live.lap_start.map_or(f64::NAN, |s| g.clock - s),
+                live.current_lap.map_or(f64::NAN, f64::from),
                 g.last_lap_ms as f64 / 1000.0,
                 // before the first completed lap the game holds a huge placeholder here
                 if g.laps > 0 && best < 3600.0 { best as f64 } else { f64::NAN },

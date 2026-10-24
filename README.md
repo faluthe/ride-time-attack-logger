@@ -52,7 +52,8 @@ GWorld → +0x130 GameState → +0x358 HudLogicComponent → +0xF8 TimedResultsM
 | Gear | bike `+0x8F0` IgnitionBike → `+0x264` | i32, 0 = neutral |
 | Engine speed | bike `+0x1070` audio component → `+0x238` | f32, idle 0 .. limiter 1 |
 | Race clock | HudLogic `+0x174` | f32 s, stops while paused |
-| Best lap | HudLogic `+0xE8` | f32 s |
+| Best lap | HudLogic `+0xE8` | f32 s (a huge placeholder before the first lap) |
+| Current lap | HudLogic `+0x110` timers (0x30 each), the one whose `+0x20` is the bike → `+0x08` | f32 s, resets at the line and on restart |
 | Laps done, last lap | result item `+0xA0`, `+0xA8` | i32, i32 ms |
 
 Lap timing exists in Time Attack; other modes record without it. If an update moves GWorld, the

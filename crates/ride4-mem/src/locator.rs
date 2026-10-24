@@ -116,11 +116,14 @@ pub struct Timing {
     pub last_lap_ms: i32,
     /// Best lap this session, seconds.
     pub best_lap: f32,
+    /// Seconds into the current lap, from the game's own timer; `None` if the player has none.
+    pub current_lap: Option<f32>,
 }
 
 /// Read the lap timing through `World -> GameState -> HudLogicComponent`. `None` outside modes
-/// that have one (checked by class name, so other game states can't be misread).
-pub fn timing(m: &impl Memory, names: &Names, world: u64) -> Option<Timing> {
+/// that have one (checked by class name, so other game states can't be misread). `pawn` picks
+/// the player's lap timer out of the riders'.
+pub fn timing(m: &impl Memory, names: &Names, world: u64, pawn: u64) -> Option<Timing> {
     let deref = |p: u64| m.u64(p).filter(|&v| is_ptr(v));
     let gs = deref(world + WORLD_GAME_STATE)?;
     let hud = deref(gs + GAME_STATE_HUD_LOGIC)?;
@@ -129,10 +132,17 @@ pub fn timing(m: &impl Memory, names: &Names, world: u64) -> Option<Timing> {
     }
     let results = deref(hud + HUD_RESULTS)?;
     let player = deref(deref(results + RESULTS_ITEMS)?)?;
+    let timers = deref(hud + HUD_LAP_TIMERS);
+    let count = m.i32(hud + HUD_LAP_TIMERS + 8).unwrap_or(0).clamp(0, 64) as u64;
+    let current_lap = timers.and_then(|t| {
+        let e = (0..count).map(|i| t + i * LAP_TIMER_SIZE).find(|&e| m.u64(e + LAP_TIMER_PAWN) == Some(pawn))?;
+        m.f32(e + LAP_TIMER_TIME)
+    });
     Some(Timing {
         race_clock: m.f32(hud + HUD_RACE_CLOCK)?,
         laps: m.i32(player + ITEM_LAPS)?,
         last_lap_ms: m.i32(player + ITEM_LAST_LAP_MS)?,
         best_lap: m.f32(hud + HUD_BEST_LAP)?,
+        current_lap,
     })
 }

@@ -61,14 +61,14 @@ pub struct Live {
     pub rate: f32,
     /// The game's lap timing (Time Attack), with best lap; `None` in other modes.
     pub timing: Option<(GameTiming, f32)>,
-    /// Race-clock time the current lap started, once a lap boundary has been seen.
-    pub lap_start: Option<f64>,
+    /// Seconds into the current lap, from the game's own lap timer.
+    pub current_lap: Option<f32>,
 }
 
 impl Default for Live {
     fn default() -> Self {
         Self { link: Link::NoGame, pid: None, bike: None, controller: None, sample: None, speed: 0.0,
-            history: VecDeque::new(), recording: None, rate: 0.0, timing: None, lap_start: None }
+            history: VecDeque::new(), recording: None, rate: 0.0, timing: None, current_lap: None }
     }
 }
 
@@ -136,7 +136,6 @@ fn ride(session: &mut Session, live: &Mutex<Live>, record: &AtomicBool, dir: &st
     let mut last_pos = None;
     let mut bike = None;
     let mut ticks: VecDeque<Instant> = VecDeque::new();
-    let mut lap_start: Option<f64> = None;
     let mut last_laps: Option<i32> = None;
     // a lap was completed but its last row isn't written yet
     let mut lap_done = false;
@@ -158,7 +157,6 @@ fn ride(session: &mut Session, live: &Mutex<Live>, record: &AtomicBool, dir: &st
             }
             bike = actor;
             recent.clear();
-            lap_start = None;
             last_laps = None;
             lap_done = false;
             last_pos = None;
@@ -191,15 +189,9 @@ fn ride(session: &mut Session, live: &Mutex<Live>, record: &AtomicBool, dir: &st
                 let game = session.timing();
                 let timing = game.map(|g| GameTiming { clock: g.race_clock as f64, laps: g.laps, last_lap_ms: g.last_lap_ms });
                 if let Some(g) = timing {
-                    // a new lap starts when the counter goes up; chain exact lap times after that
+                    // a lap is done when the counter goes up
                     if last_laps.is_some_and(|n| g.laps == n + 1) {
                         lap_done = true;
-                        lap_start = Some(match lap_start {
-                            Some(s) => s + g.last_lap_ms as f64 / 1000.0,
-                            None => g.clock,
-                        });
-                    } else if last_laps.is_some_and(|n| g.laps != n) {
-                        lap_start = None; // restart or new session
                     }
                     last_laps = Some(g.laps);
                 }
@@ -240,7 +232,7 @@ fn ride(session: &mut Session, live: &Mutex<Live>, record: &AtomicBool, dir: &st
                     l.recording = recording;
                     l.rate = ticks.len() as f32;
                     l.timing = timing.zip(game.map(|g| g.best_lap));
-                    l.lap_start = lap_start;
+                    l.current_lap = game.and_then(|g| g.current_lap);
                 });
             }
         }

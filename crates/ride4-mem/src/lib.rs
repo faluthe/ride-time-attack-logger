@@ -65,7 +65,8 @@ impl Session {
 
     /// The game's lap timing, when the current mode has it (Time Attack).
     pub fn timing(&self) -> Option<Timing> {
-        locator::timing(&self.process, &self.names, self.chain()?.world)
+        let c = self.chain()?;
+        locator::timing(&self.process, &self.names, c.world, c.bike)
     }
 
     /// Read the player's bike, re-locating it when the pawn changes. `None` when there's no bike.
