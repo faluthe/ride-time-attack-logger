@@ -1,30 +1,27 @@
 //! Turn the game's files, your saves and recorded sessions into the data the site reads.
 //!
-//! ```text
-//! rta-export --out DIR [--game DIR] [--saves DIR] [--sessions DIR] [--extract]
-//! ```
-//!
 //! Track layouts and career event tables come from the game paks. They're extracted once into
-//! `~/.local/share/ride-time-attack/` and reused; `--extract` redoes it (after a game update).
-//! Saves (offline leaderboards, career results) and sessions (logged laps) are read every run.
+//! `~/.local/share/ride-time-attack/` and reused; [`Options::extract`] redoes it (after a game
+//! update). Saves (offline leaderboards, career results) and sessions (logged laps) are read
+//! every run.
 //!
-//! Writes `tracks.json`, `laps.json`, `leaderboards.json`, `career.json` and `data.js` (all of it
-//! as one classic script, so the built site also works from `file://`, where `fetch` is blocked).
+//! Writes `tracks.json`, `laps.json`, `leaderboards.json`, `career.json` and `laps/<id>.bin.gz`.
+//! `rta-export` runs it from the command line; the logger runs it after each lap to upload.
 
 use ride4_data::{events, saves, tracks, Game};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
+use std::time::UNIX_EPOCH;
 use telemetry::{csv::read_session, lapfile, laps};
 
-type Res<T> = Result<T, Box<dyn std::error::Error>>;
-
-const USAGE: &str = "rta-export --out DIR [--game DIR] [--saves DIR] [--sessions DIR] [--extract]";
+pub type Res<T> = Result<T, Box<dyn std::error::Error>>;
 
 fn home() -> PathBuf {
     PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
 }
 
-fn data_dir() -> PathBuf {
+/// `~/.local/share/ride-time-attack` (or under `$XDG_DATA_HOME`).
+pub fn data_dir() -> PathBuf {
     std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|| home().join(".local/share")).join("ride-time-attack")
 }
 
@@ -32,42 +29,26 @@ fn steam() -> PathBuf {
     home().join(".local/share/Steam/steamapps")
 }
 
-struct Args {
-    out: PathBuf,
-    game: PathBuf,
-    saves: PathBuf,
-    sessions: PathBuf,
-    extract: bool,
+pub struct Options {
+    pub out: PathBuf,
+    pub game: PathBuf,
+    pub saves: PathBuf,
+    pub sessions: PathBuf,
+    /// re-extract tracks and events from the paks instead of using the cached copies
+    pub extract: bool,
 }
 
-fn usage() -> ! {
-    eprintln!("{USAGE}");
-    std::process::exit(2)
-}
-
-fn args() -> Args {
-    let mut out = None;
-    let mut a = Args {
-        out: PathBuf::new(),
-        game: steam().join("common/RIDE 4"),
-        saves: steam().join("compatdata/1259980/pfx/drive_c/users/steamuser/AppData/Local/Ride4/Saved/SaveGames"),
-        sessions: data_dir().join("sessions"),
-        extract: false,
-    };
-    let mut it = std::env::args().skip(1);
-    while let Some(arg) = it.next() {
-        let mut val = || it.next().map(PathBuf::from).unwrap_or_else(|| usage());
-        match arg.as_str() {
-            "--out" => out = Some(val()),
-            "--game" => a.game = val(),
-            "--saves" => a.saves = val(),
-            "--sessions" => a.sessions = val(),
-            "--extract" => a.extract = true,
-            _ => usage(),
+impl Options {
+    /// The usual Steam install and save locations, and the logger's sessions.
+    pub fn new(out: PathBuf) -> Options {
+        Options {
+            out,
+            game: steam().join("common/RIDE 4"),
+            saves: steam().join("compatdata/1259980/pfx/drive_c/users/steamuser/AppData/Local/Ride4/Saved/SaveGames"),
+            sessions: data_dir().join("sessions"),
+            extract: false,
         }
     }
-    a.out = out.unwrap_or_else(|| usage());
-    a
 }
 
 fn read_json<T: serde::de::DeserializeOwned>(p: &Path) -> Res<T> {
@@ -80,13 +61,13 @@ fn write_json(p: &Path, v: &impl Serialize) -> Res<()> {
 }
 
 /// Layouts and career events: cached extraction from the game paks.
-fn game_tables(a: &Args) -> Res<(telemetry::track::Tracks, events::Events)> {
+fn game_tables(o: &Options) -> Res<(telemetry::track::Tracks, events::Events)> {
     let (tp, ep) = (data_dir().join("tracks.json"), data_dir().join("events.json"));
-    if !a.extract && tp.exists() && ep.exists() {
+    if !o.extract && tp.exists() && ep.exists() {
         return Ok((read_json(&tp)?, read_json(&ep)?));
     }
-    println!("extracting tracks and career events from {}", a.game.display());
-    let game = Game::open(&a.game)?;
+    println!("extracting tracks and career events from {}", o.game.display());
+    let game = Game::open(&o.game)?;
     let (t, e) = (tracks::extract(&game)?, events::extract(&game)?);
     std::fs::create_dir_all(data_dir())?;
     write_json(&tp, &t)?;
@@ -98,8 +79,9 @@ fn game_tables(a: &Args) -> Res<(telemetry::track::Tracks, events::Events)> {
 /// `laps.json`: every lap without its trace, plus where to find the trace.
 #[derive(Serialize)]
 struct LapIndex {
-    /// Unix seconds
-    generated: u64,
+    /// Unix seconds the newest session with laps was last written; absent without laps
+    #[serde(skip_serializing_if = "Option::is_none")]
+    generated: Option<u64>,
     laps: Vec<serde_json::Value>,
 }
 
@@ -145,11 +127,16 @@ fn write_laps(out: &Path, laps: &[laps::Lap]) -> Res<Vec<serde_json::Value>> {
     Ok(index)
 }
 
-fn main() -> Res<()> {
-    let a = args();
-    let (tracks, events) = game_tables(&a)?;
+/// Unix seconds a file was last written.
+fn modified(p: &Path) -> Option<u64> {
+    Some(std::fs::metadata(p).ok()?.modified().ok()?.duration_since(UNIX_EPOCH).ok()?.as_secs())
+}
 
-    let (leaderboards, career) = match (saves::leaderboards(&a.saves), saves::career(&a.saves, &events)) {
+/// Write everything to `o.out`.
+pub fn export(o: &Options) -> Res<()> {
+    let (tracks, events) = game_tables(o)?;
+
+    let (leaderboards, career) = match (saves::leaderboards(&o.saves), saves::career(&o.saves, &events)) {
         (Ok(l), Ok(c)) => (l, c),
         (l, c) => {
             for e in [l.err(), c.err()].into_iter().flatten() {
@@ -160,34 +147,38 @@ fn main() -> Res<()> {
     };
     println!("saves: {} leaderboards, {} career results", leaderboards.len(), career.len());
 
-    let mut files: Vec<PathBuf> = match std::fs::read_dir(&a.sessions) {
+    let mut files: Vec<PathBuf> = match std::fs::read_dir(&o.sessions) {
         Ok(d) => d.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "csv")).collect(),
         Err(e) => {
-            eprintln!("no sessions in {}: {e}", a.sessions.display());
+            eprintln!("no sessions in {}: {e}", o.sessions.display());
             vec![]
         }
     };
     files.sort();
     let mut logged = vec![];
+    // when the newest lap was recorded, so an export without new laps gives an identical index
+    let mut generated = None;
     for f in &files {
         let name = f.file_stem().unwrap().to_string_lossy().to_string();
         let laps = laps::cut(&name, read_session(f)?, &tracks);
         println!("session {name}: {} laps{}", laps.len(), laps.first().map(|l| format!(" on {}", l.track)).unwrap_or_default());
+        if !laps.is_empty() {
+            generated = generated.max(modified(f));
+        }
         logged.extend(laps);
     }
 
-    std::fs::create_dir_all(&a.out)?;
-    write_json(&a.out.join("tracks.json"), &tracks)?;
-    write_json(&a.out.join("leaderboards.json"), &leaderboards)?;
-    write_json(&a.out.join("career.json"), &career)?;
-    let generated = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs();
-    let laps = write_laps(&a.out, &logged)?;
-    write_json(&a.out.join("laps.json"), &LapIndex { generated, laps })?;
+    std::fs::create_dir_all(&o.out)?;
+    write_json(&o.out.join("tracks.json"), &tracks)?;
+    write_json(&o.out.join("leaderboards.json"), &leaderboards)?;
+    write_json(&o.out.join("career.json"), &career)?;
+    let laps = write_laps(&o.out, &logged)?;
+    write_json(&o.out.join("laps.json"), &LapIndex { generated, laps })?;
     // the old all-in-one bundle for file://; lap traces are separate files now
-    if std::fs::remove_file(a.out.join("data.js")).is_ok() {
+    if std::fs::remove_file(o.out.join("data.js")).is_ok() {
         println!("removed stale data.js");
     }
-    println!("{} logged laps ({} valid) -> {}", logged.len(), logged.iter().filter(|l| l.valid).count(), a.out.display());
+    println!("{} logged laps ({} valid) -> {}", logged.len(), logged.iter().filter(|l| l.valid).count(), o.out.display());
     Ok(())
 }
 

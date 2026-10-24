@@ -19,8 +19,8 @@ fn main() {
                     b.pos[0], b.pos[1], b.pos[2], b.gear, b.rpm, b.throttle, b.brake, b.rear
                 );
                 match s.timing() {
-                    Some(t) => println!("  clock {:.3}  laps {}  last {:.3}  best {:.3}",
-                        t.race_clock, t.laps, t.last_lap_ms as f64 / 1000.0, t.best_lap),
+                    Some(t) => println!("  clock {:.3}  lap {:.3}  laps {}  last {:.3}  best {:.3}",
+                        t.race_clock, t.current_lap.unwrap_or(f32::NAN), t.laps, t.last_lap_ms as f64 / 1000.0, t.best_lap),
                     None => println!("  (no lap timing in this mode)"),
                 }
             }

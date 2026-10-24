@@ -63,3 +63,14 @@ pub const RESULTS_ITEMS: u64 = 0xd0;
 pub const ITEM_LAPS: u64 = 0xa0;
 /// i32 milliseconds: the last completed lap, exactly as the game shows it.
 pub const ITEM_LAST_LAP_MS: u64 = 0xa8;
+
+// Current lap timer, found 2026-10-23 with `examples/lapclock.rs` (clocks inside the objects above
+// and the ones they point to). It ran to 139.29 s, dropped to 0 as the game logged a 139.322 lap,
+// and also resets when the lap is restarted without finishing it.
+/// `TArray` of per-rider lap timers on `HudLogicComponent`, [`LAP_TIMER_SIZE`] bytes each.
+pub const HUD_LAP_TIMERS: u64 = 0x110;
+pub const LAP_TIMER_SIZE: u64 = 0x30;
+/// f32 seconds into the current lap.
+pub const LAP_TIMER_TIME: u64 = 0x08;
+/// The rider's pawn: the player's entry points at the player's bike (ghosts have their own).
+pub const LAP_TIMER_PAWN: u64 = 0x20;

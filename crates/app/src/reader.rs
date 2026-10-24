@@ -5,6 +5,7 @@ use ride4_mem::{LinuxProcess, Session, EXE};
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -60,14 +61,14 @@ pub struct Live {
     pub rate: f32,
     /// The game's lap timing (Time Attack), with best lap; `None` in other modes.
     pub timing: Option<(GameTiming, f32)>,
-    /// Race-clock time the current lap started, once a lap boundary has been seen.
-    pub lap_start: Option<f64>,
+    /// Seconds into the current lap, from the game's own lap timer.
+    pub current_lap: Option<f32>,
 }
 
 impl Default for Live {
     fn default() -> Self {
         Self { link: Link::NoGame, pid: None, bike: None, controller: None, sample: None, speed: 0.0,
-            history: VecDeque::new(), recording: None, rate: 0.0, timing: None, lap_start: None }
+            history: VecDeque::new(), recording: None, rate: 0.0, timing: None, current_lap: None }
     }
 }
 
@@ -79,11 +80,12 @@ pub struct Reader {
 }
 
 impl Reader {
-    pub fn spawn(sessions_dir: PathBuf, record: bool) -> Self {
+    /// `on_lap` gets a message whenever a recorded lap is complete on disk.
+    pub fn spawn(sessions_dir: PathBuf, record: bool, on_lap: Option<Sender<()>>) -> Self {
         let live = Arc::new(Mutex::new(Live::default()));
         let rec = Arc::new(AtomicBool::new(record));
         let (l, r, dir) = (live.clone(), rec.clone(), sessions_dir.clone());
-        thread::Builder::new().name("reader".into()).spawn(move || run(l, r, dir)).expect("spawn reader");
+        thread::Builder::new().name("reader".into()).spawn(move || run(l, r, dir, on_lap)).expect("spawn reader");
         Self { live, record: rec, sessions_dir }
     }
 
@@ -104,7 +106,7 @@ fn stamp() -> String {
     format!("{:04}{:02}{:02}-{:02}{:02}{:02}", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec)
 }
 
-fn run(live: Arc<Mutex<Live>>, record: Arc<AtomicBool>, dir: PathBuf) {
+fn run(live: Arc<Mutex<Live>>, record: Arc<AtomicBool>, dir: PathBuf, on_lap: Option<Sender<()>>) {
     loop {
         let Some(pid) = LinuxProcess::find(EXE) else {
             set(&live, |l| *l = Live::default());
@@ -120,12 +122,12 @@ fn run(live: Arc<Mutex<Live>>, record: Arc<AtomicBool>, dir: PathBuf) {
             }
         };
         set(&live, |l| { l.link = Link::NoBike; l.pid = Some(pid); });
-        ride(&mut session, &live, &record, &dir);
+        ride(&mut session, &live, &record, &dir, on_lap.as_ref());
     }
 }
 
 /// Sample until the game exits.
-fn ride(session: &mut Session, live: &Mutex<Live>, record: &AtomicBool, dir: &std::path::Path) {
+fn ride(session: &mut Session, live: &Mutex<Live>, record: &AtomicBool, dir: &std::path::Path, on_lap: Option<&Sender<()>>) {
     let t0 = Instant::now();
     let period = Duration::from_secs_f64(1.0 / HZ);
     let mut next = Instant::now();
@@ -134,8 +136,9 @@ fn ride(session: &mut Session, live: &Mutex<Live>, record: &AtomicBool, dir: &st
     let mut last_pos = None;
     let mut bike = None;
     let mut ticks: VecDeque<Instant> = VecDeque::new();
-    let mut lap_start: Option<f64> = None;
     let mut last_laps: Option<i32> = None;
+    // a lap was completed but its last row isn't written yet
+    let mut lap_done = false;
 
     while session.process.alive() {
         let state = session.poll();
@@ -154,8 +157,8 @@ fn ride(session: &mut Session, live: &Mutex<Live>, record: &AtomicBool, dir: &st
             }
             bike = actor;
             recent.clear();
-            lap_start = None;
             last_laps = None;
+            lap_done = false;
             last_pos = None;
             let controller = actor.and_then(|_| session.chain()).and_then(|c| session.class_of(c.controller));
             set(live, |l| { l.history.clear(); l.bike = actor; l.controller = controller; l.recording = None; });
@@ -186,14 +189,9 @@ fn ride(session: &mut Session, live: &Mutex<Live>, record: &AtomicBool, dir: &st
                 let game = session.timing();
                 let timing = game.map(|g| GameTiming { clock: g.race_clock as f64, laps: g.laps, last_lap_ms: g.last_lap_ms });
                 if let Some(g) = timing {
-                    // a new lap starts when the counter goes up; chain exact lap times after that
+                    // a lap is done when the counter goes up
                     if last_laps.is_some_and(|n| g.laps == n + 1) {
-                        lap_start = Some(match lap_start {
-                            Some(s) => s + g.last_lap_ms as f64 / 1000.0,
-                            None => g.clock,
-                        });
-                    } else if last_laps.is_some_and(|n| g.laps != n) {
-                        lap_start = None; // restart or new session
+                        lap_done = true;
                     }
                     last_laps = Some(g.laps);
                 }
@@ -202,6 +200,11 @@ fn ride(session: &mut Session, live: &Mutex<Live>, record: &AtomicBool, dir: &st
                 if moved {
                     if let Some((w, ..)) = writer.as_mut() {
                         let _ = w.write(&sample);
+                        if std::mem::take(&mut lap_done) && w.flush().is_ok() {
+                            if let Some(tx) = on_lap {
+                                let _ = tx.send(());
+                            }
+                        }
                     }
                     recent.push_back((t, b.pos));
                     while recent.len() > 2 && t - recent[1].0 >= 0.5 {
@@ -229,7 +232,7 @@ fn ride(session: &mut Session, live: &Mutex<Live>, record: &AtomicBool, dir: &st
                     l.recording = recording;
                     l.rate = ticks.len() as f32;
                     l.timing = timing.zip(game.map(|g| g.best_lap));
-                    l.lap_start = lap_start;
+                    l.current_lap = game.and_then(|g| g.current_lap);
                 });
             }
         }

@@ -45,6 +45,11 @@ impl SessionWriter {
         Ok(())
     }
 
+    /// Get every row so far onto disk, e.g. before something else reads the file.
+    pub fn flush(&mut self) -> io::Result<()> {
+        self.out.flush()
+    }
+
     pub fn rows(&self) -> usize {
         self.rows
     }
