@@ -19,6 +19,12 @@ cargo run --release -p ride4-mem --example probe      # text readout, handy afte
 `rta-logger` options: `--sessions DIR`, `--no-record`, `--no-upload`, `--light`, and
 `--screenshot FILE.png [--shot-delay S]`, which saves one frame and exits.
 
+The dashboard's panels are switched from the header's **panels** menu and remembered in
+`~/.config/ride-time-attack/logger.json` (`$XDG_CONFIG_HOME`; screenshots don't write it). Graphs:
+speed, lean, inputs (throttle & brake), gear, rpm and g (from the change in speed). Widgets: tach,
+rider (lean), bars (throttle, brake and rear) and timer (the game's lap times). The names match the
+site's panel toggles.
+
 `rta-export` options: `--game DIR`, `--saves DIR`, `--sessions DIR`, `--extract`, which
 re-reads tracks and events from the game paks after a game update, and `--upload` (see
 "Uploading").

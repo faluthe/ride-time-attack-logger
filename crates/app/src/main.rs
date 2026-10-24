@@ -5,6 +5,7 @@
 //! ```
 
 mod fonts;
+mod panels;
 mod platform;
 mod reader;
 mod theme;
@@ -15,6 +16,7 @@ use glow::HasContext;
 use reader::{Link, Live, Reader};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
+use panels::Panels;
 use theme::Theme;
 use uploader::{Status, Uploader};
 use widgets::Series;
@@ -63,6 +65,7 @@ struct Logger {
     fonts: Option<fonts::Fonts>,
     reader: Reader,
     uploader: Uploader,
+    panels: Panels,
     screenshot: Option<PathBuf>,
     shot_delay: f32,
     started: std::time::Instant,
@@ -70,7 +73,7 @@ struct Logger {
 }
 
 impl Logger {
-    fn header(&self, ui: &imgui::Ui, live: &Live) {
+    fn header(&mut self, ui: &imgui::Ui, live: &Live) {
         let th = &self.theme;
         let (role, text) = match &live.link {
             Link::NoGame => ("text-muted", "Ride 4 not running".to_string()),
@@ -129,13 +132,18 @@ impl Logger {
             None if rec => "records when on track".into(),
             None => "not recording".into(),
         };
-        let w = ui.calc_text_size(&label)[0] + 120.0;
+        let w = ui.calc_text_size(&label)[0] + 120.0 + ui.calc_text_size("panels")[0] + 3.0 * th.s("md");
         ui.same_line_with_pos(ui.window_content_region_max()[0] - w);
         if live.recording.is_some() {
             ui.text_colored(th.c("bad"), "\u{25CF} REC");
             ui.same_line();
         }
         ui.text_disabled(&label);
+        ui.same_line();
+        if ui.button("panels") {
+            ui.open_popup("panels");
+        }
+        ui.popup("panels", || self.panels.menu(ui));
         ui.same_line();
         if ui.checkbox("record", &mut rec) {
             self.reader.record.store(rec, Ordering::Relaxed);
@@ -148,51 +156,75 @@ impl Logger {
     fn dashboard(&self, ui: &imgui::Ui, live: &Live) {
         let th = &self.theme;
         let f = self.fonts.as_ref().unwrap();
+        let p = &self.panels;
         let on = live.link == Link::Riding && live.sample.is_some();
         let (inp, lean) = match live.sample {
             Some(s) => (s.inputs.unwrap_or_default(), s.lean_deg()),
             None => (Default::default(), 0.0),
         };
         let avail = ui.content_region_avail();
-        let gauges_h = (avail[1] * 0.48).clamp(240.0, 420.0);
         let gap = th.s("md");
+        let any_graph = panels::GRAPHS.iter().any(|g| p.on(g));
+        // with no graphs, the widgets get the whole window
+        let gauges_h = if any_graph { (avail[1] * 0.48).clamp(240.0, 420.0) } else { (avail[1] - 120.0).max(240.0) };
 
-        // gauges row: tach | lean | inputs
-        ui.child_window("tach").size([gauges_h, gauges_h]).build(|| {
-            widgets::tach(ui, th, f, gauges_h - 2.0 * th.s("md"), inp.rpm, inp.gear, live.speed, on);
-        });
-        ui.same_line_with_spacing(0.0, gap);
-        let lean_w = (avail[0] - gauges_h - 2.0 * gap - 240.0).max(260.0);
-        let (max_l, max_r) = live.history.iter().fold((0.0f32, 0.0f32), |(l, r), p| (l.min(p.lean), r.max(p.lean)));
-        ui.child_window("lean").size([lean_w, gauges_h]).build(|| {
-            let s = ui.content_region_avail();
-            widgets::lean(ui, th, f, s, lean, max_l, max_r, on);
-        });
-        ui.same_line_with_spacing(0.0, gap);
-        ui.child_window("inputs").size([0.0, gauges_h]).build(|| {
-            let s = ui.content_region_avail();
-            let bw = (s[0] - 2.0 * th.s("sm")) / 3.0;
-            widgets::bar(ui, th, [bw, s[1]], inp.throttle, "throttle", "throttle");
-            ui.same_line();
-            widgets::bar(ui, th, [bw, s[1]], inp.brake, "brake", "brake");
-            ui.same_line();
-            widgets::lamp(ui, th, [bw, s[1]], inp.rear > 0.5, "rear", "rear");
-        });
+        // widgets row: tach | rider | bars. The tach is square and the bars a fixed width; the
+        // rider takes the rest (or the bars do, without the rider).
+        let (tach, rider, bars) = (p.on("tach"), p.on("rider"), p.on("bars"));
+        if tach || rider || bars {
+            let bars_fixed = 240.0;
+            let shown = [tach, rider, bars].iter().filter(|&&x| x).count() as f32;
+            let fixed = if tach { gauges_h } else { 0.0 } + if bars && rider { bars_fixed } else { 0.0 };
+            let flex = (avail[0] - fixed - gap * (shown - 1.0)).max(200.0);
+            let mut first = true;
+            let mut next = || {
+                if !std::mem::take(&mut first) {
+                    ui.same_line_with_spacing(0.0, gap);
+                }
+            };
+            if tach {
+                next();
+                ui.child_window("tach").size([gauges_h, gauges_h]).build(|| {
+                    widgets::tach(ui, th, f, gauges_h - 2.0 * th.s("md"), inp.rpm, inp.gear, live.speed, on);
+                });
+            }
+            if rider {
+                next();
+                let (max_l, max_r) = live.history.iter().fold((0.0f32, 0.0f32), |(l, r), p| (l.min(p.lean), r.max(p.lean)));
+                ui.child_window("rider").size([flex, gauges_h]).build(|| {
+                    let s = ui.content_region_avail();
+                    widgets::rider(ui, th, f, s, lean, max_l, max_r, on);
+                });
+            }
+            if bars {
+                next();
+                let w = if rider { bars_fixed } else { flex };
+                ui.child_window("bars").size([w, gauges_h]).build(|| {
+                    let s = ui.content_region_avail();
+                    let bw = (s[0] - 2.0 * th.s("sm")) / 3.0;
+                    widgets::bar(ui, th, [bw, s[1]], inp.throttle, "throttle", "throttle");
+                    ui.same_line();
+                    widgets::bar(ui, th, [bw, s[1]], inp.brake, "brake", "brake");
+                    ui.same_line();
+                    widgets::lamp(ui, th, [bw, s[1]], inp.rear > 0.5, "rear", "rear");
+                });
+            }
+            ui.dummy([0.0, gap * 0.25]);
+        }
 
-        // lap timing strip (the game's own clock, Time Attack only)
-        ui.dummy([0.0, gap * 0.25]);
-        let fmt = |s: f64| if s.is_finite() && s > 0.0 { format!("{}:{:06.3}", (s / 60.0).floor(), s % 60.0) } else { "-:--.---".into() };
-        let (current, last, best, laps) = match live.timing {
-            Some((g, best)) => (
-                live.current_lap.map_or(f64::NAN, f64::from),
-                g.last_lap_ms as f64 / 1000.0,
-                // before the first completed lap the game holds a huge placeholder here
-                if g.laps > 0 && best < 3600.0 { best as f64 } else { f64::NAN },
-                Some(g.laps),
-            ),
-            None => (f64::NAN, f64::NAN, f64::NAN, None),
-        };
-        {
+        // timer: the lap timing strip (the game's own clock, Time Attack only)
+        if p.on("timer") {
+            let fmt = |s: f64| if s.is_finite() && s > 0.0 { format!("{}:{:06.3}", (s / 60.0).floor(), s % 60.0) } else { "-:--.---".into() };
+            let (current, last, best, laps) = match live.timing {
+                Some((g, best)) => (
+                    live.current_lap.map_or(f64::NAN, f64::from),
+                    g.last_lap_ms as f64 / 1000.0,
+                    // before the first completed lap the game holds a huge placeholder here
+                    if g.laps > 0 && best < 3600.0 { best as f64 } else { f64::NAN },
+                    Some(g.laps),
+                ),
+                None => (f64::NAN, f64::NAN, f64::NAN, None),
+            };
             let _f = ui.push_font(f.large);
             let cell = |label: &str, value: String, role: &str| {
                 ui.group(|| {
@@ -214,34 +246,60 @@ impl Logger {
                 let _s = ui.push_font(f.small);
                 ui.text_disabled("lap timing is read in Time Attack");
             }
+            ui.dummy([0.0, gap * 0.5]);
         }
 
-        // rolling graphs
-        ui.dummy([0.0, gap * 0.5]);
+        // rolling graphs: one column for up to three, then two columns
+        let graphs: Vec<&str> = panels::GRAPHS.iter().copied().filter(|g| p.on(g)).collect();
+        if graphs.is_empty() {
+            return;
+        }
         let h: Vec<_> = live.history.iter().collect();
         let times: Vec<f64> = h.iter().map(|p| p.t).collect();
         let col = |f: fn(&reader::Point) -> f32| h.iter().map(|p| f(p)).collect::<Vec<f32>>();
-        let (speed, thr, brk, rpm, gear, leanv) = (
-            col(|p| p.speed), col(|p| p.inputs.throttle), col(|p| p.inputs.brake),
-            col(|p| p.inputs.rpm), col(|p| p.inputs.gear as f32), col(|p| p.lean),
-        );
-        let w = ui.content_region_avail()[0];
-        let gh = ((ui.content_region_avail()[1] - 2.0 * th.s("sm")) / 3.0).max(60.0);
-        let top = speed.iter().cloned().fold(100.0f32, f32::max) * 1.1;
+        let speed = col(|p| p.speed);
+        let cols = if graphs.len() <= 3 { 1 } else { 2 };
+        let rows = graphs.len().div_ceil(cols);
+        let sm = th.s("sm");
+        let w = (ui.content_region_avail()[0] - sm * (cols - 1) as f32) / cols as f32;
+        let gh = ((ui.content_region_avail()[1] - sm * (rows - 1) as f32) / rows as f32).max(60.0);
         let win = reader::HISTORY_S;
-        widgets::graph(ui, th, [w, gh], "speed  km/h", &times, win, 0.0, top, &[Series { values: &speed, role: "speed", step: false }]);
-        widgets::graph(ui, th, [w, gh], "throttle / brake", &times, win, 0.0, 1.0, &[
-            Series { values: &thr, role: "throttle", step: false },
-            Series { values: &brk, role: "brake", step: false },
-        ]);
-        let half = (w - th.s("sm")) / 2.0;
-        widgets::graph(ui, th, [half, gh], "rpm / gear", &times, win, 0.0, 1.0, &[
-            Series { values: &rpm, role: "rpm", step: false },
-            Series { values: &gear.iter().map(|g| g / 6.0).collect::<Vec<_>>(), role: "gear", step: true },
-        ]);
-        ui.same_line();
-        widgets::graph(ui, th, [half, gh], "lean  deg", &times, win, -65.0, 65.0, &[Series { values: &leanv, role: "lean", step: false }]);
+        for (k, &g) in graphs.iter().enumerate() {
+            if k % cols != 0 {
+                ui.same_line_with_spacing(0.0, sm);
+            }
+            let size = [w, gh];
+            match g {
+                "speed" => {
+                    let top = speed.iter().cloned().fold(100.0f32, f32::max) * 1.1;
+                    widgets::graph(ui, th, size, "speed  km/h", &times, win, 0.0, top, &[Series { values: &speed, role: "speed", step: false }]);
+                }
+                "lean" => widgets::graph(ui, th, size, "lean  deg", &times, win, -65.0, 65.0, &[Series { values: &col(|p| p.lean), role: "lean", step: false }]),
+                "inputs" => widgets::graph(ui, th, size, "throttle / brake", &times, win, 0.0, 1.0, &[
+                    Series { values: &col(|p| p.inputs.throttle), role: "throttle", step: false },
+                    Series { values: &col(|p| p.inputs.brake), role: "brake", step: false },
+                ]),
+                "gear" => widgets::graph(ui, th, size, "gear", &times, win, 0.0, 6.0, &[Series { values: &col(|p| p.inputs.gear as f32), role: "gear", step: true }]),
+                "rpm" => widgets::graph(ui, th, size, "rpm  idle to limiter", &times, win, 0.0, 1.0, &[Series { values: &col(|p| p.inputs.rpm), role: "rpm", step: false }]),
+                "g" => widgets::graph(ui, th, size, "g  braking / accelerating", &times, win, -1.5, 1.5, &[Series { values: &accel_g(&times, &speed), role: "accent", step: false }]),
+                _ => {}
+            }
+        }
     }
+}
+
+/// Longitudinal g from the (smoothed) speed history: the change over the last half second. Zero
+/// until the history spans that much, since speed jumps from 0 when the reader picks the bike up.
+fn accel_g(times: &[f64], speed: &[f32]) -> Vec<f32> {
+    const WINDOW: f64 = 0.5;
+    let mut j = 0;
+    times.iter().enumerate().map(|(i, &t)| {
+        while j + 1 < i && t - times[j + 1] >= WINDOW {
+            j += 1;
+        }
+        let dt = t - times[j];
+        if dt < WINDOW || t - times[0] < 2.0 * WINDOW { 0.0 } else { (speed[i] - speed[j]) / 3.6 / dt as f32 / 9.81 }
+    }).collect()
 }
 
 impl platform::Frame for Logger {
@@ -297,7 +355,7 @@ fn main() {
     let uploader = Uploader::spawn(a.sessions.clone(), a.upload);
     let reader = Reader::spawn(a.sessions, a.record && a.screenshot.is_none(), uploader.tx.clone());
     let app = Logger {
-        theme, fonts: None, reader, uploader, screenshot: a.screenshot, shot_delay: a.shot_delay,
+        theme, fonts: None, reader, uploader, panels: Panels::load(a.screenshot.is_some()), screenshot: a.screenshot, shot_delay: a.shot_delay,
         started: std::time::Instant::now(), done: false,
     };
     platform::run("Ride Time Attack", (1280, 800), clear, app);

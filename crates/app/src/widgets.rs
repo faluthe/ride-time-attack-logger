@@ -102,7 +102,7 @@ pub fn lamp(ui: &Ui, th: &Theme, size: V2, on: bool, role: &str, label: &str) {
 
 /// Rear view of bike and rider rolling with lean angle (right positive), over a ±65° scale with
 /// the session's max lean marked. A placeholder for a proper rider model.
-pub fn lean(ui: &Ui, th: &Theme, fonts: &crate::fonts::Fonts, size: V2, deg: f32, max_l: f32, max_r: f32, live: bool) {
+pub fn rider(ui: &Ui, th: &Theme, fonts: &crate::fonts::Fonts, size: V2, deg: f32, max_l: f32, max_r: f32, live: bool) {
     let p = reserve(ui, size);
     let dl = ui.get_window_draw_list();
     let ground = [p[0] + size[0] / 2.0, p[1] + size[1] * 0.86];
