@@ -1,0 +1,16 @@
+[package]
+name = "upload"
+description = "upload exported site data to the R2 bucket"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+dotenvy = "0.15.7"
+hex = "0.4.3"
+hmac = "0.13.0"
+md-5 = "0.11.0"
+quick-xml = { version = "0.42.0", features = ["serialize"] }
+serde.workspace = true
+sha2 = "0.11.1"
+ureq = "3.5.0"
