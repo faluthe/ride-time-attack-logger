@@ -12,6 +12,8 @@ path = "src/main.rs"
 [dependencies]
 ride4-mem.workspace = true
 telemetry.workspace = true
+export.workspace = true
+upload.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 imgui = "0.12"

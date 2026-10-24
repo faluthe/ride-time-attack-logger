@@ -6,13 +6,13 @@ ImGui dashboard and records sessions to CSV. `rta-export` turns sessions, your s
 the game's own files into the data the site shows.
 
 ```sh
-cargo run --release --bin rta-logger                 # dashboard; records while you're on track
+cargo run --release --bin rta-logger                 # dashboard; records on track, uploads each lap
 cargo run --release --bin rta-export -- --out ../site/public/data
 cargo run --release --bin rta-export -- --out ../site/public/data --upload   # and send it to R2
 cargo run --release -p ride4-mem --example probe      # text readout, handy after a game update
 ```
 
-`rta-logger` options: `--sessions DIR`, `--no-record`, `--light`, and
+`rta-logger` options: `--sessions DIR`, `--no-record`, `--no-upload`, `--light`, and
 `--screenshot FILE.png [--shot-delay S]`, which saves one frame and exits.
 
 `rta-export` options: `--game DIR`, `--saves DIR`, `--sessions DIR`, `--extract`, which
@@ -22,6 +22,7 @@ re-reads tracks and events from the game paks after a game update, and `--upload
 Data lives in `~/.local/share/ride-time-attack/`:
 - `sessions/*.csv`: one file per stint on track
 - `tracks.json`, `events.json`: layouts and career events extracted from the game paks (cached)
+- `export/`: what the logger last exported and uploaded
 
 ## Crates
 
@@ -30,9 +31,9 @@ Data lives in `~/.local/share/ride-time-attack/`:
 | `ride4-mem` | `/proc/<pid>/mem` access, FNamePool lookups, the bike locator and lap timing (`src/offsets.rs`); `examples/` holds the scanners used to find offsets |
 | `ride4-data` | pak (v9, zlib), cooked asset and GVAS readers; track, career-event and save extraction |
 | `telemetry` | samples, CSV sessions, track projection, lap cutting |
-| `export` | `rta-export` |
+| `export` | the export (library), and `rta-export` |
 | `upload` | sends an export to the site's R2 bucket over the S3 API (SigV4), only what changed |
-| `app` | `rta-logger`: reader thread plus the ImGui dashboard (winit + glutin + glow) |
+| `app` | `rta-logger`: reader and uploader threads plus the ImGui dashboard (winit + glutin + glow) |
 
 ## How the game is read
 
@@ -79,7 +80,7 @@ files still load.
 |---|---|
 | `tracks.json` | layouts (centre line, edges) by track key |
 | `leaderboards.json`, `career.json` | from the save games |
-| `laps.json` | the lap index: `{ "generated": unix seconds, "laps": [ ... ] }` |
+| `laps.json` | the lap index: `{ "generated": unix seconds, "laps": [ ... ] }`; `generated` is when the newest session with laps was last written (absent without laps), so it only changes with new laps |
 | `laps/<id>.bin.gz` | one lap's trace (see "Lap files"); stale ones are removed |
 
 Each `laps` entry has every lap field except the trace: `id`, `session`, `lap`, `track`,
@@ -99,6 +100,11 @@ lap files the index no longer lists are deleted. It refuses an export with no la
 bucket has some. Credentials come from the environment or a `.env` file (searched for from the
 current directory up); copy `.env.example` to `.env` and fill in an R2 API token with Object
 Read & Write on the bucket. The token can write the whole bucket, so it's single user for now.
+
+`rta-logger` does the same after every lap it records: when the game's lap counter goes up, the
+reader flushes the session and the uploader thread exports to `~/.local/share/ride-time-attack/export/`
+and syncs that. It's on whenever the credentials load (so start it from `logger/`, or set the
+variables), `--no-upload` turns it off, and the header shows the last upload or why it's off.
 
 ## Lap files
 

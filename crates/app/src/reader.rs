@@ -5,6 +5,7 @@ use ride4_mem::{LinuxProcess, Session, EXE};
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -79,11 +80,12 @@ pub struct Reader {
 }
 
 impl Reader {
-    pub fn spawn(sessions_dir: PathBuf, record: bool) -> Self {
+    /// `on_lap` gets a message whenever a recorded lap is complete on disk.
+    pub fn spawn(sessions_dir: PathBuf, record: bool, on_lap: Option<Sender<()>>) -> Self {
         let live = Arc::new(Mutex::new(Live::default()));
         let rec = Arc::new(AtomicBool::new(record));
         let (l, r, dir) = (live.clone(), rec.clone(), sessions_dir.clone());
-        thread::Builder::new().name("reader".into()).spawn(move || run(l, r, dir)).expect("spawn reader");
+        thread::Builder::new().name("reader".into()).spawn(move || run(l, r, dir, on_lap)).expect("spawn reader");
         Self { live, record: rec, sessions_dir }
     }
 
@@ -104,7 +106,7 @@ fn stamp() -> String {
     format!("{:04}{:02}{:02}-{:02}{:02}{:02}", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec)
 }
 
-fn run(live: Arc<Mutex<Live>>, record: Arc<AtomicBool>, dir: PathBuf) {
+fn run(live: Arc<Mutex<Live>>, record: Arc<AtomicBool>, dir: PathBuf, on_lap: Option<Sender<()>>) {
     loop {
         let Some(pid) = LinuxProcess::find(EXE) else {
             set(&live, |l| *l = Live::default());
@@ -120,12 +122,12 @@ fn run(live: Arc<Mutex<Live>>, record: Arc<AtomicBool>, dir: PathBuf) {
             }
         };
         set(&live, |l| { l.link = Link::NoBike; l.pid = Some(pid); });
-        ride(&mut session, &live, &record, &dir);
+        ride(&mut session, &live, &record, &dir, on_lap.as_ref());
     }
 }
 
 /// Sample until the game exits.
-fn ride(session: &mut Session, live: &Mutex<Live>, record: &AtomicBool, dir: &std::path::Path) {
+fn ride(session: &mut Session, live: &Mutex<Live>, record: &AtomicBool, dir: &std::path::Path, on_lap: Option<&Sender<()>>) {
     let t0 = Instant::now();
     let period = Duration::from_secs_f64(1.0 / HZ);
     let mut next = Instant::now();
@@ -136,6 +138,8 @@ fn ride(session: &mut Session, live: &Mutex<Live>, record: &AtomicBool, dir: &st
     let mut ticks: VecDeque<Instant> = VecDeque::new();
     let mut lap_start: Option<f64> = None;
     let mut last_laps: Option<i32> = None;
+    // a lap was completed but its last row isn't written yet
+    let mut lap_done = false;
 
     while session.process.alive() {
         let state = session.poll();
@@ -156,6 +160,7 @@ fn ride(session: &mut Session, live: &Mutex<Live>, record: &AtomicBool, dir: &st
             recent.clear();
             lap_start = None;
             last_laps = None;
+            lap_done = false;
             last_pos = None;
             let controller = actor.and_then(|_| session.chain()).and_then(|c| session.class_of(c.controller));
             set(live, |l| { l.history.clear(); l.bike = actor; l.controller = controller; l.recording = None; });
@@ -188,6 +193,7 @@ fn ride(session: &mut Session, live: &Mutex<Live>, record: &AtomicBool, dir: &st
                 if let Some(g) = timing {
                     // a new lap starts when the counter goes up; chain exact lap times after that
                     if last_laps.is_some_and(|n| g.laps == n + 1) {
+                        lap_done = true;
                         lap_start = Some(match lap_start {
                             Some(s) => s + g.last_lap_ms as f64 / 1000.0,
                             None => g.clock,
@@ -202,6 +208,11 @@ fn ride(session: &mut Session, live: &Mutex<Live>, record: &AtomicBool, dir: &st
                 if moved {
                     if let Some((w, ..)) = writer.as_mut() {
                         let _ = w.write(&sample);
+                        if std::mem::take(&mut lap_done) && w.flush().is_ok() {
+                            if let Some(tx) = on_lap {
+                                let _ = tx.send(());
+                            }
+                        }
                     }
                     recent.push_back((t, b.pos));
                     while recent.len() > 2 && t - recent[1].0 >= 0.5 {

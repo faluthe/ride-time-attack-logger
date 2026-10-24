@@ -1,13 +1,14 @@
 //! Ride Time Attack live logger.
 //!
 //! ```text
-//! rta-logger [--sessions DIR] [--no-record] [--light] [--screenshot FILE.png [--shot-delay S]]
+//! rta-logger [--sessions DIR] [--no-record] [--no-upload] [--light] [--screenshot FILE.png [--shot-delay S]]
 //! ```
 
 mod fonts;
 mod platform;
 mod reader;
 mod theme;
+mod uploader;
 mod widgets;
 
 use glow::HasContext;
@@ -15,17 +16,19 @@ use reader::{Link, Live, Reader};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use theme::Theme;
+use uploader::{Status, Uploader};
 use widgets::Series;
 
 struct Args {
     sessions: PathBuf,
     record: bool,
+    upload: bool,
     mode: &'static str,
     screenshot: Option<PathBuf>,
     shot_delay: f32,
 }
 
-const USAGE: &str = "rta-logger [--sessions DIR] [--no-record] [--light] [--screenshot FILE.png [--shot-delay S]]";
+const USAGE: &str = "rta-logger [--sessions DIR] [--no-record] [--no-upload] [--light] [--screenshot FILE.png [--shot-delay S]]";
 
 fn default_sessions() -> PathBuf {
     let base = std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|| {
@@ -35,12 +38,13 @@ fn default_sessions() -> PathBuf {
 }
 
 fn args() -> Args {
-    let mut a = Args { sessions: default_sessions(), record: true, mode: "dark", screenshot: None, shot_delay: 8.0 };
+    let mut a = Args { sessions: default_sessions(), record: true, upload: true, mode: "dark", screenshot: None, shot_delay: 8.0 };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--sessions" => a.sessions = it.next().expect("--sessions needs a directory").into(),
             "--no-record" => a.record = false,
+            "--no-upload" => a.upload = false,
             "--light" => a.mode = "light",
             "--screenshot" => a.screenshot = Some(it.next().expect("--screenshot needs a file").into()),
             "--shot-delay" => a.shot_delay = it.next().and_then(|s| s.parse().ok()).expect("--shot-delay needs seconds"),
@@ -58,6 +62,7 @@ struct Logger {
     theme: Theme,
     fonts: Option<fonts::Fonts>,
     reader: Reader,
+    uploader: Uploader,
     screenshot: Option<PathBuf>,
     shot_delay: f32,
     started: std::time::Instant,
@@ -92,6 +97,26 @@ impl Logger {
             ui.text_disabled(format!("{:.0} Hz", live.rate));
         }
         mono.pop();
+
+        // upload status, from the last lap
+        let ago = |at: std::time::Instant| {
+            let s = at.elapsed().as_secs();
+            if s < 60 { format!("{s}s ago") } else { format!("{}m ago", s / 60) }
+        };
+        let (role, text, tip) = match self.uploader.status() {
+            Status::Off(why) => ("text-muted", "upload off".to_string(), why),
+            Status::Idle => ("text-muted", "uploads after each lap".to_string(), String::new()),
+            Status::Working => ("warn", "uploading…".to_string(), String::new()),
+            Status::Done { at, uploaded, bytes } => {
+                ("good", format!("uploaded {uploaded} files ({} KB) {}", bytes / 1024, ago(at)), String::new())
+            }
+            Status::Failed { at, error } => ("bad", format!("upload failed {}", ago(at)), error),
+        };
+        ui.same_line_with_spacing(0.0, th.s("lg"));
+        ui.text_colored(th.c(role), &text);
+        if ui.is_item_hovered() {
+            ui.tooltip_text(format!("{tip}{}exported to {}", if tip.is_empty() { "" } else { "\n" }, self.uploader.out.display()));
+        }
 
         // right side: recording toggle and file
         let mut rec = self.reader.record.load(Ordering::Relaxed);
@@ -268,9 +293,10 @@ fn main() {
     let a = args();
     let theme = Theme::load(a.mode);
     let clear = theme.c("bg");
-    let reader = Reader::spawn(a.sessions, a.record && a.screenshot.is_none());
+    let uploader = Uploader::spawn(a.sessions.clone(), a.upload);
+    let reader = Reader::spawn(a.sessions, a.record && a.screenshot.is_none(), uploader.tx.clone());
     let app = Logger {
-        theme, fonts: None, reader, screenshot: a.screenshot, shot_delay: a.shot_delay,
+        theme, fonts: None, reader, uploader, screenshot: a.screenshot, shot_delay: a.shot_delay,
         started: std::time::Instant::now(), done: false,
     };
     platform::run("Ride Time Attack", (1280, 800), clear, app);
