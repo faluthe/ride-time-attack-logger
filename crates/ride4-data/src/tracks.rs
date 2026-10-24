@@ -36,8 +36,10 @@ pub fn track_label(key: &str) -> (String, String) {
     (name, layout.to_uppercase())
 }
 
-/// `IgnitionSplineMesh` export: three bulk `Vector2D` arrays (centreline in cm, unit normals, and
-/// the left/right edge offsets along the normal).
+/// `IgnitionSplineMesh` export: three bulk `Vector2D` arrays (centreline in cm, unit tangents, and
+/// the left/right edge offsets across the road, in cm). The second array was first read as normals,
+/// which put both edges on the centreline, one ahead and one behind; its dot product with the
+/// centreline direction is ±1 on every layout.
 fn spline(b: &[u8]) -> Result<[Vec<[f32; 2]>; 3]> {
     let mut r = Reader::new(b);
     r.p = 0x56;
@@ -69,13 +71,15 @@ pub fn extract(game: &Game) -> Result<Tracks> {
         if !base.eq_ignore_ascii_case(folder) {
             continue; // e.g. a legacy "Mugello" mesh next to "Mugello_A"
         }
-        let [centre, normal, width] = spline(&game.read(name)?)?;
+        let [centre, tangent, width] = spline(&game.read(name)?)?;
         let m = |v: f64| round2(v / 100.0); // cm -> m
         let edge = |side: usize| -> Vec<[f64; 2]> {
-            centre.iter().zip(&normal).zip(&width)
-                .map(|((c, n), w)| {
+            // offset across the road: the tangent turned a quarter (left is negative)
+            centre.iter().zip(&tangent).zip(&width)
+                .map(|((c, t), w)| {
                     let (cx, cy, w) = (c[0] as f64, c[1] as f64, w[side] as f64);
-                    [m(cx + n[0] as f64 * w), m(cy + n[1] as f64 * w)]
+                    let n = [-t[1] as f64, t[0] as f64];
+                    [m(cx + n[0] * w), m(cy + n[1] * w)]
                 }).collect()
         };
         let c: Vec<[f64; 2]> = centre.iter().map(|p| [m(p[0] as f64), m(p[1] as f64)]).collect();
