@@ -17,7 +17,8 @@ const MAX_OFF_LINE_M: f64 = 25.0;
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct Trace {
     pub t: Vec<f64>,
-    /// Lap distance from the start line, metres (slightly negative just before it).
+    /// Lap distance from the lap's start line, metres: the game's timing line when it timed the
+    /// lap, else the spline start. Continuous, so it can pass the lap length but never wraps.
     pub d: Vec<f64>,
     pub x: Vec<f64>,
     pub y: Vec<f64>,
@@ -318,7 +319,22 @@ fn export(rows: &[Sample], prog: &[f64], seg: std::ops::Range<usize>, t0: f64, t
         cum.push(cum.last().unwrap() + dist3(&rows[w[0]], &rows[w[1]]));
     }
     let times: Vec<f64> = idx.iter().map(|&k| rows[k].t).collect();
-    let mid = idx[idx.len() / 2];
+    // Lap distance runs on from the lap's own start line without wrapping. The game's timing line
+    // isn't the spline's start (on Kanto C it's ~74 m on), so plain spline progress would jump
+    // back to 0 partway through a game-timed lap.
+    let wrap = |d: f64| (d + l / 2.0).rem_euclid(l) - l / 2.0;
+    let i0 = idx[0];
+    let start = match i0.checked_sub(1) {
+        Some(p) if rows[i0].t > rows[p].t => {
+            let f = ((t0 - rows[p].t) / (rows[i0].t - rows[p].t)).clamp(0.0, 1.0);
+            prog[p] + f * wrap(prog[i0] - prog[p])
+        }
+        _ => prog[i0],
+    };
+    let mut dist = vec![wrap(prog[i0] - start)];
+    for w in idx.windows(2) {
+        dist.push(dist.last().unwrap() + wrap(prog[w[1]] - prog[w[0]]));
+    }
     let inputs = rows[idx[0]].inputs.is_some();
 
     let mut tr = Trace::default();
@@ -334,7 +350,7 @@ fn export(rows: &[Sample], prog: &[f64], seg: std::ops::Range<usize>, t0: f64, t
         let j = idx[c];
         let r = &rows[j];
         tr.t.push(round(r.t - t0, 3));
-        tr.d.push(round(if prog[j] < 0.9 * l || j > mid { prog[j] } else { prog[j] - l }, 1));
+        tr.d.push(round(dist[c], 1));
         tr.x.push(round(r.pos[0] as f64, 2));
         tr.y.push(round(r.pos[1] as f64, 2));
         tr.z.push(round(r.pos[2] as f64, 2));

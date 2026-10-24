@@ -160,7 +160,7 @@ Channels, in the order they're written (the last five only when the session has 
 | Name | Unit | `k` | Step | Notes |
 |---|---|---|---|---|
 | `t` | s since lap start | 3 | 1 ms | race clock when the game timed the lap |
-| `d` | m from the start line | 1 | 0.1 m | slightly negative just before the line |
+| `d` | m from the lap's start line | 1 | 0.1 m | the game's timing line when it timed the lap, else the spline start; only increases (it can pass the lap length, never wraps) |
 | `x`, `y` | m, world position | 2 | 1 cm | |
 | `z` | m, height | 2 | 1 cm | version 2 |
 | `hdg` | degrees, `atan2(fwd.y, fwd.x)`: 0 = +x, 90 = +y | 1 | 0.1° | −180..180, version 2 |
