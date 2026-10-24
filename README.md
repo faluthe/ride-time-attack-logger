@@ -8,14 +8,16 @@ the game's own files into the data the site shows.
 ```sh
 cargo run --release --bin rta-logger                 # dashboard; records while you're on track
 cargo run --release --bin rta-export -- --out ../site/public/data
+cargo run --release --bin rta-export -- --out ../site/public/data --upload   # and send it to R2
 cargo run --release -p ride4-mem --example probe      # text readout, handy after a game update
 ```
 
 `rta-logger` options: `--sessions DIR`, `--no-record`, `--light`, and
 `--screenshot FILE.png [--shot-delay S]`, which saves one frame and exits.
 
-`rta-export` options: `--game DIR`, `--saves DIR`, `--sessions DIR`, and `--extract`, which
-re-reads tracks and events from the game paks after a game update.
+`rta-export` options: `--game DIR`, `--saves DIR`, `--sessions DIR`, `--extract`, which
+re-reads tracks and events from the game paks after a game update, and `--upload` (see
+"Uploading").
 
 Data lives in `~/.local/share/ride-time-attack/`:
 - `sessions/*.csv`: one file per stint on track
@@ -29,6 +31,7 @@ Data lives in `~/.local/share/ride-time-attack/`:
 | `ride4-data` | pak (v9, zlib), cooked asset and GVAS readers; track, career-event and save extraction |
 | `telemetry` | samples, CSV sessions, track projection, lap cutting |
 | `export` | `rta-export` |
+| `upload` | sends an export to the site's R2 bucket over the S3 API (SigV4), only what changed |
 | `app` | `rta-logger`: reader thread plus the ImGui dashboard (winit + glutin + glow) |
 
 ## How the game is read
@@ -87,6 +90,15 @@ length and `file` the trace's path relative to `laps.json` (`laps/<id>.bin.gz`).
 
 There's no `data.js` bundle any more: traces are fetched per lap, which `file://` can't do
 anyway, so serve the site over HTTP.
+
+## Uploading
+
+`rta-export --upload` makes the `ride-time-attack-data` R2 bucket match the export: lap files
+and JSON that are new or changed (by MD5 against the ETag) go up first, `laps.json` last, then
+lap files the index no longer lists are deleted. It refuses an export with no laps when the
+bucket has some. Credentials come from the environment or a `.env` file (searched for from the
+current directory up); copy `.env.example` to `.env` and fill in an R2 API token with Object
+Read & Write on the bucket. The token can write the whole bucket, so it's single user for now.
 
 ## Lap files
 

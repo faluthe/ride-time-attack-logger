@@ -1,15 +1,17 @@
 //! Turn the game's files, your saves and recorded sessions into the data the site reads.
 //!
 //! ```text
-//! rta-export --out DIR [--game DIR] [--saves DIR] [--sessions DIR] [--extract]
+//! rta-export --out DIR [--game DIR] [--saves DIR] [--sessions DIR] [--extract] [--upload]
 //! ```
 //!
 //! Track layouts and career event tables come from the game paks. They're extracted once into
 //! `~/.local/share/ride-time-attack/` and reused; `--extract` redoes it (after a game update).
 //! Saves (offline leaderboards, career results) and sessions (logged laps) are read every run.
 //!
-//! Writes `tracks.json`, `laps.json`, `leaderboards.json`, `career.json` and `data.js` (all of it
-//! as one classic script, so the built site also works from `file://`, where `fetch` is blocked).
+//! Writes `tracks.json`, `laps.json`, `leaderboards.json`, `career.json` and `laps/<id>.bin.gz`.
+//!
+//! `--upload` then sends what changed to the site's R2 bucket (see the `upload` crate for the
+//! `.env` it needs).
 
 use ride4_data::{events, saves, tracks, Game};
 use serde::Serialize;
@@ -18,7 +20,7 @@ use telemetry::{csv::read_session, lapfile, laps};
 
 type Res<T> = Result<T, Box<dyn std::error::Error>>;
 
-const USAGE: &str = "rta-export --out DIR [--game DIR] [--saves DIR] [--sessions DIR] [--extract]";
+const USAGE: &str = "rta-export --out DIR [--game DIR] [--saves DIR] [--sessions DIR] [--extract] [--upload]";
 
 fn home() -> PathBuf {
     PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
@@ -38,6 +40,7 @@ struct Args {
     saves: PathBuf,
     sessions: PathBuf,
     extract: bool,
+    upload: bool,
 }
 
 fn usage() -> ! {
@@ -53,6 +56,7 @@ fn args() -> Args {
         saves: steam().join("compatdata/1259980/pfx/drive_c/users/steamuser/AppData/Local/Ride4/Saved/SaveGames"),
         sessions: data_dir().join("sessions"),
         extract: false,
+        upload: false,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -63,6 +67,7 @@ fn args() -> Args {
             "--saves" => a.saves = val(),
             "--sessions" => a.sessions = val(),
             "--extract" => a.extract = true,
+            "--upload" => a.upload = true,
             _ => usage(),
         }
     }
@@ -147,6 +152,8 @@ fn write_laps(out: &Path, laps: &[laps::Lap]) -> Res<Vec<serde_json::Value>> {
 
 fn main() -> Res<()> {
     let a = args();
+    // check the credentials before the export, not after
+    let store = if a.upload { Some(upload::R2::from_env()?) } else { None };
     let (tracks, events) = game_tables(&a)?;
 
     let (leaderboards, career) = match (saves::leaderboards(&a.saves), saves::career(&a.saves, &events)) {
@@ -188,6 +195,12 @@ fn main() -> Res<()> {
         println!("removed stale data.js");
     }
     println!("{} logged laps ({} valid) -> {}", logged.len(), logged.iter().filter(|l| l.valid).count(), a.out.display());
+
+    if let Some(store) = store {
+        println!("uploading to R2 bucket {}", store.bucket());
+        let s = upload::sync(&store, &a.out)?;
+        println!("  {} uploaded ({} KB), {} unchanged, {} deleted", s.uploaded.len(), s.bytes / 1024, s.unchanged, s.deleted.len());
+    }
     Ok(())
 }
 
