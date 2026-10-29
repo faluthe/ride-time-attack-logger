@@ -1,11 +1,14 @@
-//! Track layouts from the minimap spline meshes in the game paks.
+//! Track layouts from the minimap spline meshes in the game paks, and each venue's photo.
 
 use crate::pak::Game;
 use crate::reader::{err, Reader, Result};
+use crate::texture::{self, Image};
 use std::collections::BTreeMap;
 use telemetry::track::{Track, Tracks};
 
 const MAPS: &str = "ride4/Content/assets/ui/Images/Libraries/maps/";
+/// One 1920x1080 photo per venue, shown behind the track menus (`Kanto_Bkg`).
+const BACKGROUNDS: &str = "ride4/Content/assets/ui/Images/Libraries/Track/Track_Bkg/";
 
 /// Venue display names by key prefix (`kanto_c` -> "Kanto").
 const VENUES: &[(&str, &str)] = &[
@@ -24,6 +27,11 @@ const VENUES: &[(&str, &str)] = &[
 /// Layout key as used everywhere (`Kanto_C` -> `kanto_c`).
 pub fn track_key(s: &str) -> String {
     s.to_lowercase()
+}
+
+/// The venue part of a layout key (`kanto_c` -> `kanto`).
+pub fn venue_key(key: &str) -> &str {
+    key.rsplit_once('_').map_or(key, |(v, _)| v)
 }
 
 /// `kanto_c` -> ("Kanto", "C")
@@ -87,6 +95,18 @@ pub fn extract(game: &Game) -> Result<Tracks> {
         let key = track_key(folder);
         let (venue, layout) = track_label(&key);
         out.insert(key, Track { venue, layout, length_m: length.round(), centre: c, left: edge(0), right: edge(1) });
+    }
+    Ok(out)
+}
+
+/// Each venue's background photo, by venue key (`kanto`). The per-layout `Track_Variant` images
+/// would suit layouts better, but they're all the same "PlaceHolders" map.
+pub fn backgrounds(game: &Game) -> Result<BTreeMap<String, Image>> {
+    let mut out = BTreeMap::new();
+    for name in game.names() {
+        let Some(base) = name.strip_prefix(BACKGROUNDS).and_then(|n| n.strip_suffix("_Bkg.uexp")) else { continue };
+        let img = texture::decode(&game.read(name)?).map_err(|e| crate::Error(format!("{name}: {e}")))?;
+        out.insert(track_key(base), img);
     }
     Ok(out)
 }

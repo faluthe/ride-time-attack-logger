@@ -13,6 +13,7 @@ shows.
 cargo run --release --bin rta-logger                 # dashboard; records on track, uploads each lap
 cargo run --release --bin rta-export -- --out ../site/public/data
 cargo run --release --bin rta-export -- --out ../site/public/data --upload   # and send it to R2
+cargo run --release --bin rta-photos -- --out ../site/public/tracks          # venue photos, once per game update
 cargo run --release -p ride4-mem --example probe      # text readout, handy after a game update
 ```
 
@@ -29,6 +30,11 @@ site's panel toggles.
 re-reads tracks and events from the game paks after a game update, and `--upload` (see
 "Uploading").
 
+`rta-photos` dumps each venue's photo (the game's 1920x1080 track menu background) from the
+paks as `<venue>.jpg` plus a 640 px wide `<venue>-card.jpg`; venue keys are layout keys without
+the layout (`kanto_c` -> `kanto`). The site keeps them as static files, so this only needs
+rerunning if a game update changes them; `rta-export` and the uploads never touch them.
+
 Data lives in `~/.local/share/ride-time-attack/`:
 - `sessions/*.csv`: one file per stint on track
 - `tracks.json`, `events.json`: layouts and career events extracted from the game paks (cached)
@@ -41,7 +47,7 @@ Data lives in `~/.local/share/ride-time-attack/`:
 | `ride4-mem` | `/proc/<pid>/mem` access, FNamePool lookups, the bike locator and lap timing (`src/offsets.rs`); `examples/` holds the scanners used to find offsets |
 | `ride4-data` | pak (v9, zlib), cooked asset and GVAS readers; track, career-event and save extraction |
 | `telemetry` | samples, CSV sessions, track projection, lap cutting |
-| `export` | the export (library), and `rta-export` |
+| `export` | the export (library), `rta-export` and `rta-photos` |
 | `upload` | sends an export to the site's R2 bucket over the S3 API (SigV4), only what changed |
 | `app` | `rta-logger`: reader and uploader threads plus the ImGui dashboard (winit + glutin + glow) |
 

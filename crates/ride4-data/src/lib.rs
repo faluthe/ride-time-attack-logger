@@ -10,4 +10,5 @@ pub use pak::Game;
 pub use reader::{Error, Result};
 pub mod events;
 pub mod saves;
+pub mod texture;
 pub mod tracks;
