@@ -19,3 +19,8 @@ ride4-data.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 flate2 = "1"
+image = { version = "0.25.10", default-features = false, features = ["jpeg"] }
+
+[[bin]]
+name = "rta-photos"
+path = "src/bin/rta-photos.rs"
